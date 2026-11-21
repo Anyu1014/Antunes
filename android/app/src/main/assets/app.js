@@ -1124,8 +1124,9 @@ window.addEventListener('playback',({detail:s})=>{
   if(trackChanged&&t){lastTrackID=t.id;const recent=[t,...read('recents',[]).filter(x=>x.id!==t.id)].slice(0,200);write('recents',recent);if(lyricID!==t.id)loadLyrics(t.id);if(overlayKind==='nowPlaying'){$('#overlay').innerHTML=nowPlayingHTML(t);setupSeek();setupPager();setupCommentsSwipe();setupDismissDrag();loadNowComments(t);wireNowPlaying();if(showLyric)renderLyrics();}document.querySelectorAll('[data-track-id]').forEach(n=>n.classList.toggle('current',Number(n.dataset.trackId)===t.id));}
   if(trackChanged&&player.fm&&player.index>=player.queue.length-2)fmRefill();
   if(trackChanged)updatePlaylistLocator();
-  // 漫游页只靠封面/歌词两块表达内容，换歌时必须自己刷新，否则封面会停在上一首。
-  if(trackChanged&&route.kind==='fm'){const c=document.querySelector('#page .fm-cover');if(c){const tmp=document.createElement('div');tmp.innerHTML=cover(t?.cover,'fm-cover');const next=tmp.firstElementChild;if(next)c.replaceWith(next);}fmLyricKey='';}
+  // 漫游页的歌名/作者/封面都取自 player.queue[player.index]，换歌后必须整页重绘，
+  // 否则歌名和作者会停在上一次渲染的那首（只补封面不够）。
+  if(trackChanged&&route.kind==='fm'&&player.fm){fmLyricKey='';render();}
   if(trackChanged)refreshAmbient();
   if(chromeChanged){renderChrome();if(overlayKind==='nowPlaying'){document.querySelectorAll('.np-controls .play-main,.np-land-controls .play-main').forEach(b=>{b.innerHTML=icon(player.playing?'pause':'play');if(b.dataset.transport)b.setAttribute('aria-label',player.playing?'暂停':'播放');});$('.np-cover')?.classList.toggle('paused',!player.playing);}}
   if(player.error&&player.error!==window.lastPlaybackError){toast(player.error);window.lastPlaybackError=player.error;}if(!player.error)window.lastPlaybackError='';
