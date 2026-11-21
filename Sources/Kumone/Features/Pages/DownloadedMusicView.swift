@@ -38,7 +38,7 @@ struct DownloadedMusicView: View {
             }
         } rows: { layout in
             TrackListView(tracks: visible, source: .none, selection: isSelecting ? $selectedIDs : nil,
-                          layout: layout)
+                          layout: layout, sizeLabels: sizeLabels)
                 .disabled(isRemoving)
                 .padding(.horizontal, Theme.Layout.contentInset - 10)
         } footer: {
@@ -77,6 +77,13 @@ struct DownloadedMusicView: View {
             Button("移除下载", role: .destructive) { removeSelection() }
             Button("取消", role: .cancel) {}
         } message: { Text("歌曲仍会保留在歌单中。") }
+    }
+
+    /// 「已下载」每行右侧显示这首歌占用的磁盘空间。
+    private var sizeLabels: [Int: String] {
+        downloads.downloadedBytes.mapValues { value in
+            ByteCountFormatter.string(fromByteCount: value, countStyle: .file)
+        }
     }
 
     private func selectionHeader(tracks: [Track]) -> some View {
@@ -363,15 +370,23 @@ private struct DownloadTaskRow: View {
 
 struct TrackDownloadActions: View {
     let track: Track
-    var showsIcons = false
-    @ObservedObject private var downloads = DownloadManager.shared
+    let showsIcons: Bool
+    @ObservedObject private var state: TrackDownloadState
     @EnvironmentObject private var account: AccountStore
     @EnvironmentObject private var settings: SettingsManager
     @Environment(\.openLogin) private var openLogin
 
-    private var job: DownloadJob? { downloads.jobsByTrackID[track.id] }
+    init(track: Track, showsIcons: Bool = false) {
+        self.track = track
+        self.showsIcons = showsIcons
+        // Other songs' download changes must not rebuild this menu.
+        _state = ObservedObject(wrappedValue: DownloadManager.shared.trackState(for: track.id))
+    }
+
+    private var downloads: DownloadManager { .shared }
 
     var body: some View {
+        let job = state.value.menuJob
         if let job, job.status == .complete {
             Button(role: .destructive) { Task { await downloads.deleteLocalAudio(trackID: track.id) } } label: {
                 actionLabel("移除下载", systemImage: "trash")
@@ -396,7 +411,7 @@ struct TrackDownloadActions: View {
         else { Text(title) }
     }
 
-    private func resume(_ job: DownloadJob) {
+    private func resume(_ job: TrackDownloadState.MenuJob) {
         MeteredDownloadCenter.shared.request(bulk: false, count: 1, network: downloads.network) { metered in
             Task { await downloads.resume(job.id, allowsMetered: metered) }
         }
@@ -405,7 +420,7 @@ struct TrackDownloadActions: View {
     private func enqueue() {
         guard account.isLoggedIn else { openLogin(); return }
         MeteredDownloadCenter.shared.request(bulk: false, count: 1, network: downloads.network) { metered in
-            Task { await downloads.enqueue(track: track, quality: settings.audioQuality.rawValue, allowsMetered: metered) }
+            Task { await downloads.enqueue(track: track, quality: settings.downloadQuality.rawValue, allowsMetered: metered) }
         }
     }
 }
@@ -541,7 +556,7 @@ struct DownloadCollectionButton: View {
                 await downloads.resumeCollection(owner, allowsMetered: metered)
                 guard downloads.accountScope == scope else { return }
                 await downloads.enqueue(tracks: tracks, owner: owner, name: name,
-                                        quality: settings.audioQuality.rawValue, allowsMetered: metered)
+                                        quality: settings.downloadQuality.rawValue, allowsMetered: metered)
             }
         }
     }

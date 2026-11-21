@@ -6,6 +6,27 @@ import Testing
 @Suite("Playlist publication")
 @MainActor
 struct PlaylistPublicationTests {
+    @Test(arguments: [false, true])
+    func unchangedRefreshDoesNotRepublishDetailOrTracks(persisted: Bool) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = persisted ? PlaylistSnapshotStore(directory: root) : nil
+        let tracks = try makeTracks([1, 2])
+        let detail = try makeDetail(ids: [1, 2], tracks: tracks)
+        let model = PlaylistContent(playlistID: 1, snapshots: store, accountScope: { "a" },
+            detailLoader: { _ in .init(playlist: detail, privileges: []) })
+        await model.load()
+        var detailChanges = 0, trackChanges = 0
+        let detailObservation = model.$detail.dropFirst().sink { _ in detailChanges += 1 }
+        let trackObservation = model.$tracks.dropFirst().sink { _ in trackChanges += 1 }
+        defer { detailObservation.cancel(); trackObservation.cancel() }
+
+        await model.load()
+
+        #expect(detailChanges == 0 && trackChanges == 0)
+        #expect(model.tracks == tracks && model.detail == detail)
+    }
+
     @Test func largePlaylistPublishesCompletePrivilegeBatches() async throws {
         let ids = Array(1...1_200)
         let tracks = try makeTracks(ids)

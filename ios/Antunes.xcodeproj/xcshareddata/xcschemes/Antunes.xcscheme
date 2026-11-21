@@ -16,9 +16,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "481C5C62EB4A6DB3CC0FDC39"
-               BuildableName = "KumoneIOS.app"
+               BuildableName = "Antunes.app"
                BlueprintName = "KumoneIOS"
-               ReferencedContainer = "container:KumoneIOS.xcodeproj">
+               ReferencedContainer = "container:Antunes.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -33,9 +33,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "481C5C62EB4A6DB3CC0FDC39"
-            BuildableName = "KumoneIOS.app"
+            BuildableName = "Antunes.app"
             BlueprintName = "KumoneIOS"
-            ReferencedContainer = "container:KumoneIOS.xcodeproj">
+            ReferencedContainer = "container:Antunes.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
       <Testables>
@@ -47,7 +47,7 @@
                BlueprintIdentifier = "7F3FA2EAD87A1580A6CD3880"
                BuildableName = "KumoneIOSUITests.xctest"
                BlueprintName = "KumoneIOSUITests"
-               ReferencedContainer = "container:KumoneIOS.xcodeproj">
+               ReferencedContainer = "container:Antunes.xcodeproj">
             </BuildableReference>
          </TestableReference>
       </Testables>
@@ -69,9 +69,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "481C5C62EB4A6DB3CC0FDC39"
-            BuildableName = "KumoneIOS.app"
+            BuildableName = "Antunes.app"
             BlueprintName = "KumoneIOS"
-            ReferencedContainer = "container:KumoneIOS.xcodeproj">
+            ReferencedContainer = "container:Antunes.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
       <CommandLineArguments>
@@ -88,9 +88,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "481C5C62EB4A6DB3CC0FDC39"
-            BuildableName = "KumoneIOS.app"
+            BuildableName = "Antunes.app"
             BlueprintName = "KumoneIOS"
-            ReferencedContainer = "container:KumoneIOS.xcodeproj">
+            ReferencedContainer = "container:Antunes.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>

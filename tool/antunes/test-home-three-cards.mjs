@@ -1,0 +1,33 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {resolve} from 'node:path';
+import vm from 'node:vm';
+const root=process.argv[2]||resolve(import.meta.dirname,'../..');
+const read=p=>readFileSync(resolve(root,p),'utf8');
+const source=read('android/app/src/main/assets/app.js');
+const code=source.slice(source.indexOf('function card('),source.indexOf('async function explorePage('));
+function fixture(loggedIn,failed=[]){
+ const album=Array.from({length:8},(_,id)=>({id:id+1,name:'Album '+id})),artist=Array.from({length:6},(_,id)=>({id:id+10,name:'Artist '+id}));
+ const data={'/personalized/playlist':{result:[{id:1,name:'Playlist'}]},'/v1/discovery/recommend/resource':{recommend:[{id:1,name:'Playlist'}]},'/toplist':{list:[{id:19723756,name:'Chart'}]},'/album/new':{albums:album},'/toplist/artist':{artists:artist},'/v6/playlist/detail':{playlist:{id:1,name:'Radar'}}};
+ const context={loggedIn,cache:new Map(),api:async path=>{if(failed.includes(path))throw new Error('fixture unavailable');return data[path];},e:String,cover:()=>'',icon:()=>'',count:String,navigate(){},switchTab(){},startHeart(){},header:title=>`<h1>${title}</h1>`,round:()=>'',button:(label,fn,cls='')=>`<button class="${cls}">${label}</button>`};
+ vm.createContext(context);vm.runInContext(code,context);return context;
+}
+const hint='部分功能需登录后完全显示';
+let html=await fixture(false,['/toplist/artist']).homePage();
+assert(html.includes(hint),'anonymous partial failure must show the login-completeness hint');
+assert(!html.includes('部分内容加载失败'),'do not call anonymous incomplete functionality a loading failure');
+html=await fixture(false).homePage();assert(html.includes(hint));assert.equal((html.match(/class="card album"/g)||[]).length,8);assert.equal((html.match(/class="card artist"/g)||[]).length,6);
+html=await fixture(true,['/toplist/artist']).homePage();assert(!html.includes(hint));assert(html.includes('部分内容加载失败')&&html.includes('重新加载'));
+await assert.rejects(fixture(false,['/personalized/playlist','/toplist','/album/new','/toplist/artist']).homePage(),/fixture unavailable/);
+console.log('HOME: anonymous=login hint; authenticated-error=retry; fatal-error=preserved; all albums/artists=retained; PASS');
+const css=read('android/app/src/main/assets/app.css');
+assert(/#page\[data-route=home\] \.shelf \.card\.album,\s*#page\[data-route=home\] \.shelf \.card\.artist\s*\{[^}]*flex-basis:calc\(\(100% - 32px\)\/3\)/.test(css));
+console.log('ANDROID_STATIC: home album/artist shelves=3 columns; existing horizontal scroll=retained; PASS');
+const ios=read('Sources/Kumone/Features/Home/HomeView.swift');
+assert(ios.includes('Text("部分功能需登录后完全显示。")'));
+assert(ios.includes('(geometry.size.width - 2 * Theme.Layout.contentInset - 32) / 3'));
+assert(ios.includes('Shelf(title: "新碟上架", rowHeight: albumRowHeight)'));
+assert(ios.includes('Shelf(title: "推荐歌手", rowHeight: artistRowHeight)'));
+assert(ios.includes('artistCard(artist, size: artistSize)')&&ios.includes('albumCard(album, size: cardSize)'));
+assert(ios.includes('let albumRowHeight = cardSize + 50')&&ios.includes('let artistRowHeight = cardSize + 40')&&ios.includes('let artistSize = cardSize'));
+console.log('IOS_STATIC: album/artist share 3-column sizing; existing Shelf horizontal scrolling reused; PASS');

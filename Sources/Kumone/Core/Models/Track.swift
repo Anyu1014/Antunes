@@ -52,7 +52,7 @@ struct Track: Codable, Hashable, Identifiable {
     let noCopyright: Bool
     /// Cloud-disk song marker (`pc` field present).
     let isCloud: Bool
-    /// Some endpoints (cloudsearch, FM) embed the privilege in the track itself.
+    /// Some endpoints (cloudsearch) embed the privilege in the track itself.
     let embeddedPrivilege: TrackPrivilege?
 
     var artistNames: String { artists.map(\.name).joined(separator: " / ") }

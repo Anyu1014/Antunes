@@ -19,7 +19,7 @@
 #                    App Store Connect API key, used for automatic provisioning
 #                    and for --upload. Without it Xcode's signed-in account is used.
 #
-# Output lands in .build/testflight/: Kumone.xcarchive and, unless uploading,
+# Output lands in .build/testflight/: Antunes.xcarchive and, unless uploading,
 # export/KumoneIOS.ipa for Transporter or the Organizer.
 
 set -euo pipefail
@@ -63,7 +63,7 @@ elif [ "$UPLOAD" -eq 1 ]; then
 fi
 
 OUT=".build/testflight"
-ARCHIVE="$OUT/Kumone.xcarchive"
+ARCHIVE="$OUT/Antunes.xcarchive"
 EXPORT="$OUT/export"
 rm -rf "$OUT"; mkdir -p "$OUT"
 
@@ -73,15 +73,18 @@ else
   Scripts/configure-ios.sh
 fi
 
-echo "==> Archiving Kumone iOS $VERSION ($BUILD), TestFlight configuration, team $TEAM_ID, CarPlay $([ "$CARPLAY" -eq 1 ] && echo on || echo off)"
+echo "==> Archiving Antunes iOS $VERSION ($BUILD), TestFlight configuration, team $TEAM_ID, CarPlay $([ "$CARPLAY" -eq 1 ] && echo on || echo off)"
 xcodebuild archive \
-  -workspace ios/KumoneIOS.xcworkspace -scheme KumoneIOS \
+  -workspace ios/Antunes.xcworkspace -scheme Antunes \
   -configuration TestFlight -destination 'generic/platform=iOS' \
   -archivePath "$ARCHIVE" \
+  -derivedDataPath "$REPO_ROOT/ios/DerivedData" \
   -allowProvisioningUpdates "${AUTH[@]}" \
   DEVELOPMENT_TEAM="$TEAM_ID" \
   MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD" \
   | tail -20
+# 归档瘦身：dSYM 占 .xcarchive 约 80%，只留最近 3 个版本（旧版本崩溃不再符号化）
+/Users/y/toolchains/bin/xc-archive-slim --keep 3 "$OUT" || true
 
 DESTINATION=export
 [ "$UPLOAD" -eq 1 ] && DESTINATION=upload
@@ -108,8 +111,8 @@ xcodebuild -exportArchive \
   | tail -20
 
 if [ "$UPLOAD" -eq 1 ]; then
-  echo "✅ Uploaded Kumone iOS $VERSION ($BUILD) to App Store Connect; it appears in TestFlight after processing."
+  echo "✅ Uploaded Antunes iOS $VERSION ($BUILD) to App Store Connect; it appears in TestFlight after processing."
 else
   echo "✅ Archive: $ARCHIVE"
-  echo "✅ IPA:     $EXPORT/KumoneIOS.ipa  (upload with Transporter, or rerun with --upload)"
+  echo "✅ IPA:     $EXPORT/Antunes.ipa  (upload with Transporter, or rerun with --upload)"
 fi

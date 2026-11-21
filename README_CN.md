@@ -1,5 +1,5 @@
 > [!IMPORTANT]
-> 本仓库与网易云音乐没有任何关系，也不包含任何网易云音乐的域名和 API 地址。
+> Antunes 基于 [missuo/kumone](https://github.com/missuo/kumone) 二次开发，安卓移植开发中。上游署名、许可证和历史记录保留；当前仅本地热更新，未发布安装包。
 
 <div align="right">
 
@@ -9,9 +9,9 @@
 
 <div align="center">
 
-<img src="docs/icon.png" width="140" alt="Kumone" />
+<img src="docs/icon.png" width="140" alt="Antunes" />
 
-# Kumone
+# Antunes
 
 **雲の音 — 原生 macOS 与 iOS 音乐播放器**
 
@@ -118,7 +118,10 @@ make configure           # 切回默认的无 CarPlay 构建
 swift build                    # 编译
 Scripts/build-app.sh           # 打包 .app（输出 .build/app/Kumone.app）
 Scripts/compile_and_run.sh     # 杀进程 → 重新打包 → 启动
+Scripts/package.sh [android|ios|all|clean]   # build/latest/ 当前包；iOS 需 KUMONE_TEAM_ID；clean 只清 .cache/
 ```
+
+发行包命名固定为 `Antunes-<版本>.apk` / `Antunes-<版本>.ipa`，不带平台后缀；同级版本重打时旧文件自动移入 `build/history/`。
 
 ## 架构
 

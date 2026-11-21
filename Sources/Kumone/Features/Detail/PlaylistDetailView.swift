@@ -12,10 +12,20 @@ struct PlaylistDetailView: View {
     private let player = PlayerService.shared
     @EnvironmentObject private var account: AccountStore
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    /// 吸顶条是否已经顶到导航栏下缘。
+    @State private var headerStuck = false
     @State private var showFullDescription = false
     #if os(iOS)
+    /// 页面可用尺寸：横屏时顶部信息要按「小播放器右边缘」收窄，需要真实窗口宽度。
+    @State private var containerSize: CGSize = .zero
     @State private var showSearch = false
     @State private var searchFocused = false
+    @State private var locateTrackID: Int?
+    @State private var locateRequest = 0
+    /// 歌单多选：和安卓端一样的「选择」模式。
+    @State private var isSelecting = false
+    @State private var selectedIDs: Set<Int> = []
+    @State private var addSelectionToPlaylist = false
     #endif
 
     init(playlistID: Int, isLikedList: Bool = false, recommendationContext: RecommendationContext? = nil) {
@@ -34,6 +44,29 @@ struct PlaylistDetailView: View {
         return UIDevice.current.userInterfaceIdiom == .phone || horizontalSizeClass == .compact
         #else
         return false
+        #endif
+    }
+
+    /// 横屏时歌曲列表从右半区开始（左半区留给顶部信息）。
+    private var heroInset: CGFloat {
+        #if os(iOS)
+        guard isCompact, containerSize.width > containerSize.height,
+              containerSize.width >= 540 else { return 0 }
+        return 12 + min(336, max(218, (containerSize.width - 24) * 0.38))
+        #else
+        return 0
+        #endif
+    }
+
+    /// 横屏时顶部信息（封面/标题/作者/播放量/简介/播放全部）只占小播放器右边缘以内。
+    /// 播放器宽度与 `IOSMainWindow` 里 playerWidth 同一条公式，两侧各 12pt 内边距。
+    private var heroMaxWidth: CGFloat {
+        #if os(iOS)
+        guard isCompact, containerSize.width > containerSize.height,
+              containerSize.width >= 540 else { return .infinity }
+        return 12 + min(336, max(218, (containerSize.width - 24) * 0.38))
+        #else
+        return .infinity
         #endif
     }
 
@@ -82,6 +115,15 @@ struct PlaylistDetailView: View {
                 .task(id: "\(playlistID):\(account.offlineScope ?? ""):\(downloads.network.isKnown):\(downloads.network.connected)") {
                     await loadPlaylist()
                 }
+                #if os(iOS)
+                .onChange(of: locateRequest) { _ in
+                    guard let id = locateTrackID else { return }
+                    // Let a cleared search lay out its rows before scrolling.
+                    DispatchQueue.main.async {
+                        withAnimation(AppAnimation.standard) { proxy.scrollTo(id, anchor: .center) }
+                    }
+                }
+                #endif
                 .toolbar {
                     if model.errorMessage != nil, downloads.network.connected, model.detail != nil {
                         ToolbarItem(placement: .primaryAction) {
@@ -162,9 +204,59 @@ struct PlaylistDetailView: View {
         .clipped()
         .navigationTitle(model.detail?.name ?? String(localized: "歌单"))
         #else
+        GeometryReader { geo in
+            if HomeView.splitsLandscape(geo.size) {
+                landscapeContents(width: geo.size.width)
+            } else {
+                singleColumnContents
+            }
+        }
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(.hidden, for: .navigationBar)
+        .progressiveTopBarInLandscape()
+        .background(Platform.windowBackgroundColor.ignoresSafeArea())
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text(isSearchActive
+                     ? String(localized: "搜索歌单内歌曲")
+                     : (model.detail?.name ?? ""))
+                    .font(.headline)
+                    .lineLimit(1)
+                    .opacity(headerStuck || isSearchActive ? 1 : 0)
+                    .animation(.easeInOut(duration: 0.18), value: headerStuck)
+            }
+        }
+        .scrollDismissesKeyboard(.interactively)
+        #endif
+    }
+
+    #if os(iOS)
+    /// 竖屏：原来的单列（hero + 吸顶操作条 + 歌曲列表）。
+    private var singleColumnContents: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: isCompact ? 16 : 20) {
-                playlistContents
+            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                playlistHero
+                    .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
+                    .frame(maxWidth: heroMaxWidth, alignment: .leading)
+                    .padding(.top, isCompact ? 12 : 16)
+                    .padding(.bottom, 4)
+                Section {
+                    playlistBody
+                        .padding(.leading, heroInset)
+                } header: {
+                    pinnedActionBar
+                        // 吸顶条顶到导航栏下缘（`minY` 到 0）就算两部分合并；
+                        // 还在跟着内容走的时候不显示标题。
+                        .background {
+                            GeometryReader { geo in
+                                Color.clear.preference(
+                                    key: HeaderStuckKey.self,
+                                    value: geo.frame(in: .named("playlistScroll")).minY
+                                )
+                            }
+                        }
+                }
             }
             .id("playlistTop")
             #if os(iOS)
@@ -181,11 +273,51 @@ struct PlaylistDetailView: View {
             }
             #endif
         }
-        .navigationTitle(isSearchActive ? String(localized: "搜索歌单内歌曲") : "")
-        .navigationBarTitleDisplayMode(.inline)
-        .scrollDismissesKeyboard(.interactively)
+        .coordinateSpace(name: "playlistScroll")
+        #if os(iOS)
+        .background {
+            GeometryReader { proxy in
+                Color.clear
+                    .onAppear { containerSize = proxy.size }
+                    .onChange(of: proxy.size) { size in containerSize = size }
+            }
+        }
         #endif
+        .onPreferenceChange(HeaderStuckKey.self) { minY in
+            headerStuck = minY <= 1
+        }
     }
+
+    /// 横屏：左半 = 封面/标题/创作者/简介/操作条，右半 = 歌曲列表，各自独立滚动。
+    private func landscapeContents(width: CGFloat) -> some View {
+        let leftWidth = max(260, min(420, width * 0.42))
+        return HStack(alignment: .top, spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    playlistHero
+                        .padding(.horizontal, 16)
+                        .padding(.top, 12)
+                    pinnedActionBar
+                        .padding(.horizontal, 16)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.bottom, Theme.Layout.playerChromeClearance)
+            }
+            .frame(width: leftWidth)
+            .scrollIndicators(.hidden)
+
+            Divider().opacity(0.35)
+
+            ScrollView {
+                playlistBody
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+                    .padding(.bottom, Theme.Layout.playerChromeClearance)
+            }
+            .scrollIndicators(.hidden)
+        }
+    }
+    #endif
 
     #if os(macOS)
     private func desktopFooterHeight(_ detail: PlaylistDetail) -> CGFloat {
@@ -207,10 +339,86 @@ struct PlaylistDetailView: View {
             onRemoved: { track in Task { await model.remove(track) } },
             recommendationContext: recommendationContext,
             onRecommendationReplaced: { model.replaceRecommendation($0, with: $1) },
+            selection: isSelecting ? $selectedIDs : nil,
             layout: layout,
             // A search result plays the whole playlist from that song.
             queue: model.orderedTracks
         )
+    }
+
+    /// Cover, title, counts and description. Scrolls away — it is deliberately
+    /// not part of the pinned area.
+    @ViewBuilder
+    private var playlistHero: some View {
+        if !isSearchActive, model.loadedScope == account.offlineScope, let detail = model.detail {
+            if isCompact {
+                compactHero(detail)
+            } else {
+                regularHeader(detail)
+            }
+        }
+    }
+
+    /// The play-all row. Only this row stays pinned while the list scrolls.
+    @ViewBuilder
+    private var pinnedActionBar: some View {
+        if isCompact, !isSearchActive, model.loadedScope == account.offlineScope, let detail = model.detail {
+            compactActionBar(detail)
+                .padding(.horizontal, 16)
+                // 横屏时和顶部信息一样只用左半区；外面那层 maxWidth 仍然拉满，
+                // 这样白底不会只铺一半。
+                .frame(maxWidth: heroMaxWidth, alignment: .leading)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                // 吸顶条自己不再铺底：横屏那层渐进模糊由页面顶部的
+                // `ProgressiveTopBlur` 统一提供，这里只留按钮本身。
+        }
+    }
+
+    /// Everything below the pinned header.
+    @ViewBuilder
+    private var playlistBody: some View {
+        if model.loadedScope == account.offlineScope, let detail = model.detail {
+            let filteredTracks = model.filteredTracks
+            VStack(alignment: .leading, spacing: isCompact ? 16 : 20) {
+                if isSearchActive {
+                    ListSearchBar(text: $model.filter, isFocused: $searchFocused) {
+                        model.filter = ""
+                        searchFocused = false
+                        withAnimation(AppAnimation.standard) { showSearch = false }
+                    }
+                    .padding(.horizontal, isCompact ? 8 : Theme.Layout.contentInset - 8)
+                    .padding(.top, 8)
+                    .transition(.opacity)
+                }
+
+                if supportsPlaylistSearch && TrackSearch.query(model.filter) != nil {
+                    SongSearchSummary(
+                        count: filteredTracks.count,
+                        isSettled: !model.isLoadingMore && model.errorMessage == nil,
+                        onClear: isSearchActive ? nil : { model.filter = "" },
+                        horizontalPadding: isCompact ? 16 : Theme.Layout.contentInset
+                    )
+                }
+
+                trackList(filteredTracks)
+                    .padding(.horizontal, isCompact ? 6 : Theme.Layout.contentInset - 10)
+
+                playlistStatus(detail)
+            }
+            .padding(.top, 8)
+        } else if model.isLoading {
+            loadingHeader
+        } else if let message = model.errorMessage {
+            ErrorStateView(message: message) {
+                Task { await loadPlaylist() }
+            }
+            .frame(minHeight: 400)
+        } else {
+            EmptyStateView(icon: "music.note.list", title: "联网后载入歌曲")
+                .frame(minHeight: 400)
+        }
+        PlayerClearanceSpacer()
     }
 
     @ViewBuilder
@@ -271,7 +479,7 @@ struct PlaylistDetailView: View {
 
     @ViewBuilder
     private func playlistStatus(_ detail: PlaylistDetail) -> some View {
-        if model.isLoading || model.isLoadingMore {
+        if !model.isRefreshing && (model.isLoading || model.isLoadingMore) {
             HStack {
                 Spacer()
                 ProgressView().controlSize(.small)
@@ -319,8 +527,15 @@ struct PlaylistDetailView: View {
 
     private func compactHeader(_ detail: PlaylistDetail) -> some View {
         VStack(alignment: .leading, spacing: 14) {
+            compactHero(detail)
+            compactActionBar(detail)
+        }
+    }
+
+    private func compactHero(_ detail: PlaylistDetail) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 14) {
-                CachedAsyncImage(url: detail.coverImgUrl?.resizedImageURL(384))
+                CachedAsyncImage(url: detail.coverImgUrl?.resizedImageURL(384), animated: false)
                     .frame(width: 120, height: 120)
                     .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.standard, style: .continuous))
                     .shadow(color: .black.opacity(0.2), radius: 10, y: 4)
@@ -382,8 +597,27 @@ struct PlaylistDetailView: View {
                     }
                 }
             }
+        }
+    }
 
-            // Compact Action Bar
+    @ViewBuilder
+    private var currentTrackLocator: some View {
+        #if os(iOS)
+        PlaylistLocateButton(trackIDs: Set(model.tracks.map(\.id))) { id in
+            model.filter = ""
+            showSearch = false
+            searchFocused = false
+            locateTrackID = id
+            locateRequest += 1
+        }
+        #endif
+    }
+
+    private func compactActionBar(_ detail: PlaylistDetail) -> some View {
+        Group {
+            if isSelecting {
+                selectionBar(detail)
+            } else {
             HStack(spacing: 10) {
                 Button {
                     player.play(tracks: playable, source: .playlist(playlistID),
@@ -392,6 +626,8 @@ struct PlaylistDetailView: View {
                     HStack(spacing: 6) {
                         Image(systemName: "play.fill")
                         Text("播放全部 (\(playable.count))")
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
                     }
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white)
@@ -402,6 +638,8 @@ struct PlaylistDetailView: View {
                 }
                 .buttonStyle(.pressable)
                 .disabled(playable.isEmpty)
+
+                selectToggleButton()
 
                 downloadButton(detail, compact: true)
 
@@ -420,23 +658,26 @@ struct PlaylistDetailView: View {
                     Button {
                         toggleSubscribe(detail)
                     } label: {
-                        Image(systemName: detail.subscribed ? "checkmark" : "plus")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(detail.subscribed ? Theme.accent : .primary)
+                        Image(systemName: detail.subscribed ? "star.fill" : "star")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(detail.subscribed ? Color(red: 0.95, green: 0.72, blue: 0.02) : .primary)
                             .frame(width: 38, height: 38)
                             .background(.primary.opacity(0.06), in: Circle())
                     }
                     .buttonStyle(.pressable)
                 }
+                currentTrackLocator
+            }
             }
         }
+        .animation(AppAnimation.standard, value: isSelecting)
     }
 
     // MARK: - Regular (Desktop / iPad) Header
 
     private func regularHeader(_ detail: PlaylistDetail) -> some View {
         HStack(alignment: .bottom, spacing: 24) {
-            CachedAsyncImage(url: detail.coverImgUrl?.resizedImageURL(512))
+            CachedAsyncImage(url: detail.coverImgUrl?.resizedImageURL(512), animated: false)
                 .frame(width: 200, height: 200)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.large, style: .continuous))
                 .shadow(color: .black.opacity(0.25), radius: 16, y: 8)
@@ -497,7 +738,11 @@ struct PlaylistDetailView: View {
     }
 
     private func actionRow(_ detail: PlaylistDetail) -> some View {
-        HStack(spacing: 10) {
+        Group {
+            if isSelecting {
+                selectionBar(detail)
+            } else {
+            HStack(spacing: 10) {
             Button {
                 player.play(tracks: playable, source: .playlist(playlistID),
                             context: .playlist(id: playlistID, name: detail.name))
@@ -512,6 +757,8 @@ struct PlaylistDetailView: View {
             }
             .buttonStyle(.pressable)
             .disabled(playable.isEmpty)
+
+            selectToggleButton()
 
             if isLikedList {
                 Button {
@@ -529,7 +776,7 @@ struct PlaylistDetailView: View {
                     toggleSubscribe(detail)
                 } label: {
                     Label(detail.subscribed ? String(localized: "已收藏") : String(localized: "收藏"),
-                          systemImage: detail.subscribed ? "checkmark" : "plus")
+                          systemImage: detail.subscribed ? "star.fill" : "star")
                         .font(.system(size: 13, weight: .medium))
                         .padding(.horizontal, 14)
                         .padding(.vertical, 8)
@@ -540,12 +787,20 @@ struct PlaylistDetailView: View {
 
             downloadButton(detail)
 
+            #if os(iOS)
+            Spacer(minLength: 0)
+            currentTrackLocator
+            #endif
+
             #if os(macOS)
             Spacer()
 
             ListFilterField(placeholder: "搜索歌单内歌曲", text: $model.filter)
             #endif
+            }
+            }
         }
+        .animation(AppAnimation.standard, value: isSelecting)
     }
 
     private var playable: [Track] {
@@ -587,6 +842,116 @@ struct PlaylistDetailView: View {
         }
     }
 
+    // MARK: - Selection
+
+    private func selectToggleButton() -> some View {
+        Button {
+            withAnimation(AppAnimation.standard) {
+                isSelecting.toggle()
+                if !isSelecting { selectedIDs = [] }
+            }
+        } label: {
+            Image(systemName: isSelecting ? "checkmark.circle.fill" : "checkmark.circle")
+                .font(.system(size: 18, weight: .regular))
+                .foregroundStyle(isSelecting ? Theme.accent : Color.primary)
+                .frame(width: 38, height: 38)
+                .background(.primary.opacity(0.06), in: Circle())
+        }
+        .buttonStyle(.pressable)
+        .accessibilityLabel(isSelecting ? "退出选择" : "选择歌曲")
+        .accessibilityIdentifier("playlist-select-toggle")
+    }
+
+    private func selectionAction(_ symbol: String, _ label: String,
+                                 enabled: Bool = true,
+                                 action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 17))
+                .frame(width: 38, height: 38)
+                .background(.primary.opacity(0.06), in: Circle())
+                .opacity(enabled ? 1 : 0.35)
+        }
+        .buttonStyle(.pressable)
+        .disabled(!enabled)
+        .accessibilityLabel(label)
+        .accessibilityIdentifier("playlist-select-\(label)")
+    }
+
+    private func selectionBar(_ detail: PlaylistDetail) -> some View {
+        HStack(spacing: 10) {
+            Text("已选 \(selectedIDs.count) 首")
+                .font(.system(size: 13, weight: .medium))
+                .lineLimit(1)
+                .accessibilityIdentifier("playlist-select-count")
+            Spacer(minLength: 0)
+            selectionAction("checkmark.circle", "全选") { toggleSelectAll() }
+            selectionAction("arrow.down.circle", "下载所选", enabled: !selectedIDs.isEmpty) { downloadSelection(detail) }
+            selectionAction("heart", "收藏所选", enabled: !selectedIDs.isEmpty) { likeSelection() }
+            selectionAction("text.badge.plus", "添加到歌单", enabled: !selectedIDs.isEmpty) {
+                addSelectionToPlaylist = true
+            }
+            Button("完成") {
+                withAnimation(AppAnimation.standard) {
+                    isSelecting = false
+                    selectedIDs = []
+                }
+            }
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(Theme.accent)
+            .accessibilityIdentifier("playlist-select-done")
+        }
+        .padding(.vertical, 2)
+        .sheet(isPresented: $addSelectionToPlaylist) {
+            AddToPlaylistSheet(tracks: selectedTrackList)
+        }
+    }
+
+    private var selectedTrackList: [Track] {
+        model.tracks.filter { selectedIDs.contains($0.id) }
+    }
+
+    private func toggleSelectAll() {
+        let all = Set(model.tracks.map(\.id))
+        if selectedIDs.isSuperset(of: all) { selectedIDs = [] } else { selectedIDs = all }
+    }
+
+    private func downloadSelection(_ detail: PlaylistDetail) {
+        let tracks = selectedTrackList
+        guard !tracks.isEmpty else {
+            ToastCenter.shared.show(String(localized: "先选几首"))
+            return
+        }
+        let owner = "playlist:\(playlistID)"
+        let name = detail.name
+        MeteredDownloadCenter.shared.request(bulk: true, count: tracks.count, network: downloads.network) { metered in
+            Task {
+                await downloads.enqueue(tracks: tracks, owner: owner, name: name,
+                                        quality: SettingsManager.shared.downloadQuality.rawValue,
+                                        allowsMetered: metered)
+            }
+        }
+    }
+
+    private func likeSelection() {
+        let tracks = selectedTrackList
+        guard !tracks.isEmpty else {
+            ToastCenter.shared.show(String(localized: "先选几首"))
+            return
+        }
+        guard account.isLoggedIn else {
+            ToastCenter.shared.show(String(localized: "登录后才能收藏"))
+            return
+        }
+        Task {
+            for track in tracks {
+                try? await MusicAPI.likeTrack(id: track.id, like: true)
+            }
+            await account.refreshLibrary()
+            ToastCenter.shared.show(String(localized: "已收藏 \(tracks.count) 首"))
+        }
+    }
+
     private func downloadButton(_ detail: PlaylistDetail, compact: Bool = false) -> some View {
         DownloadCollectionButton(tracks: model.tracks, owner: "playlist:\(playlistID)", name: detail.name,
                                  enabled: model.canDownloadAll, compact: compact)
@@ -607,5 +972,48 @@ struct PlaylistDetailView: View {
         }
         .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
         .padding(.top, isCompact ? 12 : 16)
+    }
+}
+
+#if os(iOS)
+private struct PlaylistLocateButton: View {
+    let trackIDs: Set<Int>
+    let locate: (Int) -> Void
+    @ObservedObject private var player = PlayerService.shared
+
+    private var isVisible: Bool {
+        guard let id = player.currentTrack?.id else { return false }
+        return trackIDs.contains(id)
+    }
+
+    var body: some View {
+        // 始终存在，宽度/透明度做动画：定位按钮冒出来时，播放全部胶囊
+        // 收缩、右侧按钮左移都是同一帧的连续插值，不会硬跳。
+        Button {
+            if let id = player.currentTrack?.id, trackIDs.contains(id) { locate(id) }
+        } label: {
+            LocateGlyph(size: 20, color: Theme.accent)
+                .frame(width: 38, height: 38)
+                .background(.primary.opacity(0.06), in: Circle())
+        }
+        .buttonStyle(.pressable)
+        .frame(width: isVisible ? 38 : 0)
+        .opacity(isVisible ? 1 : 0)
+        .scaleEffect(isVisible ? 1 : 0.7)
+        .clipped()
+        .allowsHitTesting(isVisible)
+        .accessibilityHidden(!isVisible)
+        .accessibilityLabel("定位当前歌曲")
+        .accessibilityIdentifier("playlist-locate-current")
+        .animation(AppAnimation.standard, value: isVisible)
+    }
+}
+#endif
+
+/// 滚动内容相对 `playlistScroll` 坐标系的 minY。
+private struct HeaderStuckKey: PreferenceKey {
+    static var defaultValue: CGFloat = .greatestFiniteMagnitude
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = min(value, nextValue())
     }
 }

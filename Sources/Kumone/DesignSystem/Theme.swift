@@ -139,6 +139,22 @@ extension View {
         #endif
     }
 
+    /// iOS 顶部吸顶条。
+    ///
+    /// 竖屏：整条磨砂，列表从下面滑过时还能透出一点，和安卓端顶栏的
+    /// `backdrop-filter` 同一观感。横屏：不再给顶栏铺底色，只留一层自建的
+    /// 渐进模糊（向下渐隐），按钮位置不变——和安卓端横屏那层遮罩对齐。
+    /// macOS 保持系统工具栏不动。
+    func frostedNavigationBar() -> some View {
+        modifier(TopBarBackground(portraitFrosted: true))
+    }
+
+    /// 只在横屏生效的顶栏处理：去掉系统导航栏的实底，换成自建渐进模糊；
+    /// 竖屏原样返回，不碰任何默认样式。
+    func progressiveTopBarInLandscape() -> some View {
+        modifier(TopBarBackground(portraitFrosted: false))
+    }
+
     /// Glass background with a graceful material fallback on macOS 15.
     @ViewBuilder
     func compatGlass(interactive: Bool = false, in shape: some Shape) -> some View {
@@ -156,6 +172,89 @@ extension View {
         }
         #else
         self.background(.ultraThinMaterial, in: shape)
+        #endif
+    }
+}
+
+/// 横屏标记：由 `IOSMainWindow` 在窗口方向变化时写进环境，供顶栏决定要不要
+/// 换成渐进模糊。
+private struct LandscapeWindowKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var isLandscapeWindow: Bool {
+        get { self[LandscapeWindowKey.self] }
+        set { self[LandscapeWindowKey.self] = newValue }
+    }
+}
+
+/// 顶部一层向下渐隐的磨砂，代替不透明顶栏。和 Android 端
+/// `#page::before` 的遮罩同一种做法：顶部最实，到 `fadeStart` 开始变透明。
+/// 每页自己的底色（和窗口/inner 内容一致），顶栏渐变吃它才不会出现色差。
+private struct PageBaseColorKey: EnvironmentKey {
+    static let defaultValue = Color(uiColor: .systemBackground)
+}
+
+extension EnvironmentValues {
+    var pageBaseColor: Color {
+        get { self[PageBaseColorKey.self] }
+        set { self[PageBaseColorKey.self] = newValue }
+    }
+}
+
+struct ProgressiveTopBlur: View {
+    var height: CGFloat = 96
+    var fadeStart: CGFloat = 0.34
+    @Environment(\.pageBaseColor) private var baseColor
+
+    var body: some View {
+        // 用页面底色本身做渐隐：顶栏区域和屏幕底层完全同色，
+        // 内容滚到下面时再逐渐淡出，不会像材质那样把颜色抬亮一档。
+        Rectangle()
+            .fill(baseColor)
+            .mask(
+                LinearGradient(
+                    stops: [
+                        .init(color: .black, location: 0),
+                        .init(color: .black, location: fadeStart),
+                        .init(color: .clear, location: 1)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+            .frame(maxWidth: .infinity)
+            .frame(height: height)
+            // 横屏时左右也要贯穿整屏，否则只在安全区里那一条有模糊。
+            .ignoresSafeArea(edges: .top)
+            .allowsHitTesting(false)
+    }
+}
+
+struct TopBarBackground: ViewModifier {
+    /// 竖屏是否保留原来的整条磨砂导航栏。
+    var portraitFrosted: Bool
+    @Environment(\.isLandscapeWindow) private var isLandscape
+
+    func body(content: Content) -> some View {
+        #if os(iOS)
+        if isLandscape {
+            content
+                .compatHiddenToolbarBackground()
+                .overlay(alignment: .top) {
+                    ProgressiveTopBlur()
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                }
+        } else if portraitFrosted {
+            content
+                .toolbarBackground(.visible, for: .navigationBar)
+                .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
+        } else {
+            content
+        }
+        #else
+        content
         #endif
     }
 }

@@ -7,6 +7,7 @@ struct StorageSpaceView: View {
     @EnvironmentObject private var settings: SettingsManager
     #if os(iOS)
     @State private var automaticLimitMB: Int?
+    @State private var lyricBytes: Int64 = 0
     #endif
     @Environment(\.scenePhase) private var scenePhase
 
@@ -37,7 +38,7 @@ struct StorageSpaceView: View {
             }
 
             Section {
-                LabeledContent(model.snapshot?.partial == true ? String(localized: "已统计的 Kumone 占用") : String(localized: "Kumone 占用")) {
+                LabeledContent(model.snapshot?.partial == true ? String(localized: "已统计的 Antunes 占用") : String(localized: "Antunes 占用")) {
                     Text(model.snapshot.map { format($0.appBytes) } ?? "—")
                         .font(.body.weight(.semibold)).monospacedDigit()
                 }
@@ -98,6 +99,28 @@ struct StorageSpaceView: View {
             }
 
             Section {
+                LabeledContent("歌词缓存") {
+                    Text(lyricBytes > 0 ? ByteCountFormatter.string(fromByteCount: lyricBytes, countStyle: .file) : String(localized: "无"))
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+                Button(role: .destructive) {
+                    Task {
+                        await OfflineMetadataStore.shared.clearLyrics(excluding: downloadedTrackIDs)
+                        lyricBytes = OfflineMetadataStore.shared.lyricsBytes(excluding: downloadedTrackIDs)
+                    }
+                } label: {
+                    Text("清除歌词缓存")
+                }
+                .disabled(lyricBytes == 0)
+            } footer: {
+                Text("歌词随下载一起保存，清除后需要联网重新获取。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            Section {
                 Button(action: onManageDownloads) {
                     HStack {
                         Label("已下载", systemImage: "arrow.down.circle")
@@ -139,6 +162,7 @@ struct StorageSpaceView: View {
         .task(id: scenePhase) {
             if scenePhase == .active, !model.isClearing {
                 await model.reload()
+                lyricBytes = OfflineMetadataStore.shared.lyricsBytes(excluding: downloadedTrackIDs)
             }
         }
         #if os(macOS)
@@ -156,6 +180,9 @@ struct StorageSpaceView: View {
         }
         #endif
     }
+
+    /// 已下载的歌曲，其歌词归入下载，不在「歌词缓存」里统计或清除。
+    private var downloadedTrackIDs: Set<Int> { Set(DownloadManager.shared.offlineTracks.map(\.id)) }
 
     private var busy: Bool { model.isLoading || model.isClearing }
     #if os(iOS)

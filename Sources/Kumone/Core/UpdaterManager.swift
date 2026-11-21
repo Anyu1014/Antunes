@@ -21,12 +21,8 @@ final class UpdaterManager: ObservableObject {
         controller.updater.publisher(for: \.canCheckForUpdates)
             .receive(on: DispatchQueue.main)
             .assign(to: &$canCheckForUpdates)
-        controller.updater.automaticallyChecksForUpdates = SettingsManager.shared.autoCheckUpdates
-    }
-
-    /// Toggle Sparkle's scheduled update checks (#42).
-    func setAutomaticChecks(_ enabled: Bool) {
-        controller.updater.automaticallyChecksForUpdates = enabled
+        // 二改作品：不再向上游 feed 自动检查更新（设置里的「更新」已移除）。
+        controller.updater.automaticallyChecksForUpdates = false
     }
 
     func checkForUpdates() {

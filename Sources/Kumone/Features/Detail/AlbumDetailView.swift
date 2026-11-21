@@ -55,6 +55,24 @@ struct AlbumDetailView: View {
     }
 
     private var onlineContent: some View {
+        #if os(iOS)
+        GeometryReader { geo in
+            if HomeView.splitsLandscape(geo.size) {
+                landscapeContents(width: geo.size.width)
+            } else {
+                portraitContents
+            }
+        }
+        .navigationBarTitleDisplayMode(.inline)
+        .frostedNavigationBar()
+        .background(Platform.windowBackgroundColor.ignoresSafeArea())
+        #else
+        portraitContents
+            .navigationTitle(album?.name ?? String(localized: "专辑"))
+        #endif
+    }
+
+    private var portraitContents: some View {
         TrackListScrollView(trackIDs: tracks.map(\.id), spacing: isCompact ? 16 : 20) {
             if let album {
                 if isCompact {
@@ -99,12 +117,62 @@ struct AlbumDetailView: View {
                 PlayerClearanceSpacer()
             }
         }
-        #if os(macOS)
-        .navigationTitle(album?.name ?? String(localized: "专辑"))
-        #else
-        .navigationBarTitleDisplayMode(.inline)
-        #endif
     }
+
+    #if os(iOS)
+    /// 横屏：左栏封面/信息，右栏曲目，两栏各自滚动。
+    @ViewBuilder private func landscapeContents(width: CGFloat) -> some View {
+        HStack(alignment: .top, spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    if let album {
+                        compactHeader(album).padding(.horizontal, 16).padding(.top, 12)
+                    } else if isLoading {
+                        loadingHeader
+                    } else if let errorMessage {
+                        ErrorStateView(message: errorMessage) { Task { await load() } }
+                            .frame(minHeight: 240)
+                    }
+                    if !otherAlbums.isEmpty {
+                        SectionHeader(title: "该歌手的其他专辑")
+                            .padding(.horizontal, 16)
+                            .padding(.top, 8)
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 16) {
+                                ForEach(otherAlbums) { item in
+                                    NavigationLink(value: Destination.album(item.id)) {
+                                        CoverCardBody(
+                                            coverURL: item.picUrl?.resizedImageURL(384),
+                                            title: item.name,
+                                            subtitle: Formatters.date(fromMS: item.publishTime)
+                                        )
+                                    }
+                                    .buttonStyle(.interactiveCard)
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(.bottom, Theme.Layout.playerChromeClearance)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .scrollIndicators(.hidden)
+            .frame(width: max(240, min(420, width * 0.42)))
+
+            Divider().opacity(0.3)
+
+            TrackListScrollView(trackIDs: tracks.map(\.id), spacing: 16) {
+                EmptyView()
+            } rows: { layout in
+                TrackListView(tracks: tracks, source: .album(albumID),
+                              context: album.map { .album(id: albumID, name: $0.name) }, layout: layout)
+                    .padding(.horizontal, 6)
+            } footer: {
+                PlayerClearanceSpacer()
+            }
+        }
+    }
+    #endif
 
     private func load() async {
         loadGeneration += 1

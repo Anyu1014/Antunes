@@ -162,7 +162,7 @@ struct CommentShareCard: View {
             }
             Spacer()
             Label {
-                Text(verbatim: "Kumone")
+                Text(verbatim: "Antunes")
             } icon: {
                 Image(systemName: "music.note")
             }
@@ -324,7 +324,7 @@ struct CommentShareSheet: View {
         } catch {
             let status = PHPhotoLibrary.authorizationStatus(for: .addOnly)
             saveState = .failed(status == .denied || status == .restricted
-                ? String(localized: "没有相册权限，请在系统设置中允许 Kumone 添加照片")
+                ? String(localized: "没有相册权限，请在系统设置中允许 Antunes 添加照片")
                 : error.localizedDescription)
         }
     }

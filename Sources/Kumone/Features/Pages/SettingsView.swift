@@ -37,14 +37,33 @@ struct SettingsSheet: View {
                         }
                     case .soundEffects:
                         SoundEffectsPage()
+                    case .about:
+                        AboutView()
                     }
                 }
         }
+        // 设置抽屉也是「场景」之一：横屏同样去掉系统顶栏底色，只留自建渐进模糊。
+        .progressiveTopBarInLandscape()
     }
 }
 #endif
 
 struct SettingsView: View {
+    @AppStorage("tabBarShowsLabels") private var showsTabBarLabels = false
+    @AppStorage("librarySearchButton") private var librarySearchButton = true
+    @AppStorage("bottomBarLyrics") private var bottomBarLyrics = true
+    @AppStorage("lyricBarAlignment") private var lyricBarAlignment = "center"
+    @AppStorage("tabOrder") private var tabOrder = "home,explore,library,search"
+    @AppStorage("startTab") private var startTab = "auto"
+    @AppStorage("libraryOrder") private var libraryOrder = "liked,daily,recents,collections,downloads,cloud"
+    @AppStorage("libraryShowsCreatedPlaylists") private var libraryShowsCreatedPlaylists = true
+    @AppStorage("libraryShowsCollectedPlaylists") private var libraryShowsCollectedPlaylists = true
+    @AppStorage("libraryShowsLiked") private var libraryShowsLiked = true
+    @AppStorage("libraryShowsDaily") private var libraryShowsDaily = true
+    @AppStorage("libraryShowsRecents") private var libraryShowsRecents = true
+    @AppStorage("libraryShowsCollections") private var libraryShowsCollections = true
+    @AppStorage("libraryShowsDownloads") private var libraryShowsDownloads = true
+    @AppStorage("libraryShowsCloud") private var libraryShowsCloud = true
     @EnvironmentObject private var settings: SettingsManager
     @EnvironmentObject private var account: AccountStore
     @Environment(\.openDestination) private var openDestination
@@ -55,6 +74,7 @@ struct SettingsView: View {
 
     fileprivate enum SettingsPage: Hashable {
         case storage
+        case about
         #if os(iOS)
         case soundEffects
         #endif
@@ -87,15 +107,189 @@ struct SettingsView: View {
         #endif
     }
 
+    // MARK: - 主页板块排序
+
+    private func orderedKeys(_ all: [String], stored: String) -> [String] {
+        let order = stored.split(separator: ",").map(String.init)
+        return all.sorted { a, b in
+            (order.firstIndex(of: a) ?? 99) < (order.firstIndex(of: b) ?? 99)
+        }
+    }
+
+    private var orderedTabs: [String] {
+        orderedKeys(["home", "explore", "library", "search"], stored: tabOrder)
+    }
+
+    private var orderedLibraryRows: [String] {
+        orderedKeys(["liked", "daily", "recents", "collections", "downloads", "cloud"], stored: libraryOrder)
+    }
+
+    private func libraryRowTitle(_ key: String) -> String {
+        switch key {
+        case "liked": return "我喜欢的音乐"
+        case "daily": return "每日推荐"
+        case "recents": return "最近播放"
+        case "collections": return "我的收藏"
+        case "downloads": return "我的下载"
+        case "cloud": return "音乐云盘"
+        default: return key
+        }
+    }
+
+    private func libraryRowBinding(for key: String) -> Binding<Bool> {
+        switch key {
+        case "liked": return $libraryShowsLiked
+        case "daily": return $libraryShowsDaily
+        case "recents": return $libraryShowsRecents
+        case "collections": return $libraryShowsCollections
+        case "downloads": return $libraryShowsDownloads
+        case "cloud": return $libraryShowsCloud
+        default: return .constant(true)
+        }
+    }
+
+    private func tabTitle(_ key: String) -> String {
+        switch key {
+        case "home": return "推荐"
+        case "explore": return "精选"
+        case "library": return "我的"
+        case "search": return "搜索"
+        default: return key
+        }
+    }
+
+    private func binding(for key: String) -> Binding<Bool> {
+        switch key {
+        case "home": return $settings.showHome
+        case "explore": return $settings.showExplore
+        case "library": return $settings.showLibrary
+        case "search": return $settings.showSearch
+        default: return .constant(true)
+        }
+    }
+
+    /// 一组可排序行：当前顺序，以及顺序的回写方式。
+    private struct ReorderStore {
+        var order: [String]
+        var commit: ([String]) -> Void
+    }
+
+    /// 三个点菜单里的四种移动。
+    private enum RowMove: String, CaseIterable {
+        case top = "移到顶部"
+        case up = "上移"
+        case down = "下移"
+        case bottom = "移到底部"
+
+        var symbol: String {
+            switch self {
+            case .top: return "arrow.up.to.line"
+            case .up: return "arrow.up"
+            case .down: return "arrow.down"
+            case .bottom: return "arrow.down.to.line"
+            }
+        }
+    }
+
+    private var tabStore: ReorderStore {
+        ReorderStore(order: orderedTabs) { keys in
+            tabOrder = keys.joined(separator: ",")
+        }
+    }
+
+    private var libraryStore: ReorderStore {
+        ReorderStore(order: orderedLibraryRows) { keys in
+            libraryOrder = keys.joined(separator: ",")
+        }
+    }
+
+    /// 只把 `key` 挪一格或挪到端点，其余行保持相对顺序。
+    private func moveRow(_ key: String, _ move: RowMove, store: ReorderStore) {
+        var order = store.order
+        guard order.count > 1, let index = order.firstIndex(of: key) else { return }
+        switch move {
+        case .top:
+            guard index > 0 else { return }
+            order.remove(at: index)
+            order.insert(key, at: 0)
+        case .up:
+            guard index > 0 else { return }
+            order.swapAt(index, index - 1)
+        case .down:
+            guard index < order.count - 1 else { return }
+            order.swapAt(index, index + 1)
+        case .bottom:
+            guard index < order.count - 1 else { return }
+            order.remove(at: index)
+            order.append(key)
+        }
+        withAnimation(AppAnimation.standard) { store.commit(order) }
+    }
+
+    private func canMove(_ key: String, _ move: RowMove, store: ReorderStore) -> Bool {
+        guard let index = store.order.firstIndex(of: key) else { return false }
+        switch move {
+        case .top, .up: return index > 0
+        case .down, .bottom: return index < store.order.count - 1
+        }
+    }
+
+    /// 三点按钮的圆底：iOS 26 起用 `glassEffect`，旧系统退回材质圆。
+    @ViewBuilder
+    private var dragHandleSurface: some View {
+        #if os(iOS)
+        if #available(iOS 26.0, *) {
+            Circle().fill(.clear).glassEffect(.regular, in: Circle())
+        } else {
+            Circle().fill(.regularMaterial)
+        }
+        #else
+        Circle().fill(.regularMaterial)
+        #endif
+    }
+
+    private func reorderRow(_ key: String, title: String, isOn: Binding<Bool>,
+                            store: @escaping () -> ReorderStore) -> some View {
+        let current = store()
+        return HStack {
+            Toggle(title, isOn: isOn)
+            Menu {
+                ForEach(RowMove.allCases, id: \.self) { move in
+                    Button {
+                        moveRow(key, move, store: store())
+                    } label: {
+                        Label(move.rawValue, systemImage: move.symbol)
+                    }
+                    .disabled(!canMove(key, move, store: current))
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 32, height: 32)
+                    .background { dragHandleSurface }
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .menuIndicator(.hidden)
+            .accessibilityLabel("调整顺序：\(title)")
+        }
+    }
+
+    private func sectionRow(_ key: String) -> some View {
+        reorderRow(key, title: tabTitle(key), isOn: binding(for: key), store: { tabStore })
+    }
+
+    private func librarySectionRow(_ key: String) -> some View {
+        reorderRow(key, title: libraryRowTitle(key), isOn: libraryRowBinding(for: key), store: { libraryStore })
+    }
+
     private var settingsForm: some View {
         Form {
             Section("播放") {
-                Picker("音质", selection: $settings.audioQuality) {
-                    ForEach(AudioQuality.allCases) { quality in
-                        Text(quality.displayName).tag(quality)
-                    }
-                }
-                Text("无损与 Hi-Res 需要黑胶 VIP，未开通时自动回落到可用音质")
+                // 音质固定为极高：播放与下载都只用这一个档位，界面上不再提供选择。
+                LabeledContent("音质", value: AudioQuality.exhigh.displayName)
+                Text("播放与下载均为极高")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 #if os(iOS)
@@ -139,6 +333,52 @@ struct SettingsView: View {
                 }
             }
 
+            #if os(iOS)
+            Section {
+                Toggle("底栏歌词", isOn: $bottomBarLyrics)
+                Picker("底栏歌词对齐", selection: $lyricBarAlignment) {
+                    Text("居左").tag("left")
+                    Text("居中").tag("center")
+                    Text("居右").tag("right")
+                }
+                Toggle("底栏文字", isOn: $showsTabBarLabels)
+                Toggle("我的页搜索按钮", isOn: $librarySearchButton)
+                Picker("冷启动板块", selection: $startTab) {
+                    Text("自动（第一个板块）").tag("auto")
+                    ForEach(orderedTabs, id: \.self) { tab in
+                        Text(tabTitle(tab)).tag(tab)
+                    }
+                }
+                ForEach(orderedTabs, id: \.self) { tab in
+                    sectionRow(tab)
+                }
+            } header: {
+                Text("主页板块")
+            } footer: {
+                Text("点右侧三个点可移到顶部、上移、下移、移到底部（顺序即底栏从左到右）；只留一项时底栏显示该项图标。")
+            }
+
+            Section {
+                ForEach(orderedLibraryRows, id: \.self) { key in
+                    librarySectionRow(key)
+                }
+            } header: {
+                Text("我的音乐板块")
+            } footer: {
+                Text("点右侧三个点可移到顶部、上移、下移、移到底部（顺序即“我的”页里从上到下的顺序）；关掉的项不再出现在“我的”页。")
+            }
+
+            Section {
+                Toggle("展示创建的歌单", isOn: $libraryShowsCreatedPlaylists)
+                Toggle("展示收藏的歌单", isOn: $libraryShowsCollectedPlaylists)
+                Toggle("我喜欢的音乐显示在创建的歌单", isOn: $settings.showLikedInCreated)
+            } header: {
+                Text("主页歌单展示")
+            } footer: {
+                Text("关掉后“我的”页不再显示对应的歌单分组，歌单本身不会被删除。")
+            }
+            #endif
+
             Section("外观") {
                 Picker("主题", selection: $settings.appearance) {
                     ForEach(AppAppearance.allCases) { appearance in
@@ -158,20 +398,6 @@ struct SettingsView: View {
                     Text(NowPlayingMode.vinyl.displayName).tag(NowPlayingMode.vinyl)
                     Text(NowPlayingMode.classic.displayName).tag(NowPlayingMode.classic)
                 }
-                #else
-                Picker("播放页模式", selection: $settings.nowPlayingMode) {
-                    ForEach(NowPlayingMode.allCases) { mode in
-                        Text(mode.displayName).tag(mode)
-                    }
-                }
-                Picker("横屏播放页样式", selection: $settings.landscapeNowPlayingStyle) {
-                    ForEach(LandscapeNowPlayingStyle.allCases) { style in
-                        Text(style.displayName).tag(style)
-                    }
-                }
-                Text("iPhone 横放或 iPad 打开播放页时使用；竖屏仍按上面的「播放页模式」")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
                 #endif
                 Toggle("点击封面打开专辑", isOn: $settings.openAlbumOnArtworkClick)
                 Toggle("显示歌词翻译", isOn: $settings.showLyricsTranslation)
@@ -250,45 +476,18 @@ struct SettingsView: View {
                 }
             }
 
-            if showsUpdateControls {
-                Section("更新") {
-                    Toggle("启动时自动检查更新", isOn: $settings.autoCheckUpdates)
-                    Text("关闭后启动不再自动弹出更新提示，仍可手动检查更新")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    #if os(iOS)
-                    if DistributionChannel.current == .sideload {
-                        Button {
-                            IOSUpdater.shared.check(interactive: true)
-                        } label: {
-                            Label("检查更新", systemImage: "arrow.triangle.2.circlepath")
-                        }
-                        Text("装有 TrollStore（巨魔）可在应用内一键自动安装；否则可下载 IPA 用侧载工具重装（登录状态与设置保留）")
-                            .font(.caption)
+            Section {
+                NavigationLink(value: SettingsPage.about) {
+                    HStack {
+                        Text("关于")
+                        Spacer()
+                        Text("Antunes · \(appVersionAndBuild)")
                             .foregroundStyle(.secondary)
                     }
-                    #endif
                 }
+                .accessibilityIdentifier("settingsAboutButton")
             }
 
-            Section {
-                VStack(spacing: 2) {
-                    Text("Kumone")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                    Text(appVersionAndBuild)
-                        .font(.caption2)
-                        .monospacedDigit()
-                        .foregroundStyle(.tertiary)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.top, 24)
-                .padding(.bottom, 32)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(appVersionAccessibilityLabel)
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
-            }
         }
         .formStyle(.grouped)
         #if os(macOS)
@@ -299,6 +498,8 @@ struct SettingsView: View {
                     StorageSpaceView {
                         openDestination(.downloaded)
                     }
+                case .about:
+                    AboutView()
                 case .shortcuts:
                     ShortcutSettingsView()
                 }
@@ -309,20 +510,12 @@ struct SettingsView: View {
                 ToolbarItem(placement: .principal) {
                     switch page {
                     case .storage: Text("存储空间").font(.headline)
+                    case .about: Text("关于").font(.headline)
                     case .shortcuts: Text("快捷键").font(.headline)
                     }
                 }
             }
         }
-        #endif
-    }
-
-    /// Sparkle on macOS; on iOS only sideload builds carry an updater.
-    private var showsUpdateControls: Bool {
-        #if os(iOS)
-        return DistributionChannel.current.allowsSelfUpdate
-        #else
-        return true
         #endif
     }
 
@@ -338,13 +531,6 @@ struct SettingsView: View {
     private var appVersionAndBuild: String {
         guard let build = appBuild, !build.isEmpty else { return appVersion }
         return "\(appVersion) (\(build))"
-    }
-
-    private var appVersionAccessibilityLabel: String {
-        if let build = appBuild, !build.isEmpty {
-            return "Kumone, version \(appVersion), build \(build)"
-        }
-        return "Kumone, version \(appVersion)"
     }
 
 }

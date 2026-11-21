@@ -51,6 +51,44 @@ actor OfflineMetadataStore {
         return hasLyrics && hasArtwork
     }
 
+    /// 「存储空间」里的「歌词缓存」：所有账号目录下 lyrics-*.json 的总字节数。
+    nonisolated func lyricsBytes(excluding downloaded: Set<Int> = []) -> Int64 {
+        let fm = FileManager.default
+        guard let scopes = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else { return 0 }
+        var total: Int64 = 0
+        for folder in scopes {
+            guard let files = try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.fileSizeKey]) else { continue }
+            for file in files where file.lastPathComponent.hasPrefix("lyrics-") {
+                if let id = Int(file.deletingPathExtension().lastPathComponent.dropFirst("lyrics-".count)), downloaded.contains(id) { continue }
+                total += Int64((try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+            }
+        }
+        return total
+    }
+
+    /// 删除所有已缓存的歌词；下次播放或联网时会重新获取。
+    /// 删除一首歌的本地歌词（下载被删除时连带清理）。
+    nonisolated func removeLyrics(trackID: Int) {
+        let fm = FileManager.default
+        guard let scopes = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else { return }
+        for folder in scopes {
+            let file = folder.appendingPathComponent("lyrics-\(trackID).json")
+            if fm.fileExists(atPath: file.path) { try? fm.removeItem(at: file) }
+        }
+    }
+
+    func clearLyrics(excluding downloaded: Set<Int> = []) {
+        let fm = FileManager.default
+        guard let scopes = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else { return }
+        for folder in scopes {
+            guard let files = try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil) else { continue }
+            for file in files where file.lastPathComponent.hasPrefix("lyrics-") {
+                if let id = Int(file.deletingPathExtension().lastPathComponent.dropFirst("lyrics-".count)), downloaded.contains(id) { continue }
+                try? fm.removeItem(at: file)
+            }
+        }
+    }
+
     func fetchDisplayData(track: Track, scope: String) async {
         guard !Task.isCancelled else { return }
         do { try save(track: track, scope: scope) } catch { return }

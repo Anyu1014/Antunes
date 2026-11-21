@@ -42,6 +42,10 @@ final class MusicClient: @unchecked Sendable {
     // The desktop client the eapi requests speak as.
     private static let eapiUserAgent = "\(Upstream.clientName) 9.0.90/5038 (iPhone; iOS 16.2; zh_CN)"
     private static let eapiAppVersion = "3.1.17.204416"
+    /// The player-url endpoint refuses a modern `appver` with
+    /// `{"code":-460,"message":"检测到您的网络环境存在风险，请稍后再试"}`;
+    /// iOS 端同样如此，所以这条路径仍按老客户端 2.9.7 说话。
+    private static let eapiMediaAppVersion = "2.9.7"
     private static let eapiOSVersion = "Microsoft-Windows-10-Professional-build-19045-64bit"
     private static let eapiChannel = Upstream.tag
 
@@ -267,12 +271,13 @@ final class MusicClient: @unchecked Sendable {
         let apiPath = "/api" + path
         var body = payload
         let now = Date().timeIntervalSince1970
+        let mediaPath = path.hasPrefix("/song/enhance/")
         var header: [String: String] = [
             "osver": Self.eapiOSVersion,
             "deviceId": Self.deviceID,
             "os": "pc",
-            "appver": Self.eapiAppVersion,
-            "versioncode": "140",
+            "appver": mediaPath ? Self.eapiMediaAppVersion : Self.eapiAppVersion,
+            "versioncode": mediaPath ? "100" : "140",
             "mobilename": "",
             "buildver": String(Int(now)),
             "resolution": "1920x1080",

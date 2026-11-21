@@ -43,7 +43,7 @@ struct PlayerBar: View {
                         VIPBadge()
                     }
                 }
-                Text(player.currentTrack?.artistNames ?? "Kumone")
+                Text(player.currentTrack?.artistNames ?? "Antunes")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -230,8 +230,7 @@ struct PlayerBar: View {
             .help("桌面歌词")
             PlayerIconButton(
                 icon: "list.bullet", size: 13,
-                isActive: player.activePanel == .queue,
-                disabled: player.isFMMode
+                isActive: player.activePanel == .queue
             ) {
                 player.activePanel = player.activePanel == .queue ? nil : .queue
             }

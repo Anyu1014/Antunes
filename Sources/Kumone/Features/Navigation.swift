@@ -16,6 +16,14 @@ private struct PresentSettingsSheetKey: EnvironmentKey {
     static let defaultValue: () -> Void = {}
 }
 
+private struct OpenSearchKey: EnvironmentKey {
+    static let defaultValue: () -> Void = {}
+}
+
+private struct CloseSearchKey: EnvironmentKey {
+    static let defaultValue: () -> Void = {}
+}
+
 extension EnvironmentValues {
     var openLogin: () -> Void {
         get { self[OpenLoginKey.self] }
@@ -33,6 +41,18 @@ extension EnvironmentValues {
     var openDestination: (Destination) -> Void {
         get { self[OpenDestinationKey.self] }
         set { self[OpenDestinationKey.self] = newValue }
+    }
+
+    /// iOS: 从「我的」页的搜索按钮切到搜索板块（并回到搜索根页）。
+    var openSearch: () -> Void {
+        get { self[OpenSearchKey.self] }
+        set { self[OpenSearchKey.self] = newValue }
+    }
+
+    /// iOS: 搜索页右上角的关闭按钮——先退回搜索根页，否则回到上一个板块。
+    var closeSearch: () -> Void {
+        get { self[CloseSearchKey.self] }
+        set { self[CloseSearchKey.self] = newValue }
     }
 }
 
@@ -176,10 +196,19 @@ extension View {
 /// floating player bar.
 struct PlayerClearanceSpacer: View {
     @EnvironmentObject private var player: PlayerService
+    #if os(iOS)
+    @EnvironmentObject private var settings: SettingsManager
+    #endif
 
     var body: some View {
         #if os(iOS)
-        if #available(iOS 26.0, *) {
+        if settings.onlyLibrarySection {
+            Color.clear.frame(height: player.hasCurrentTrack
+                ? Theme.Layout.FloatingChrome.miniPlayerHeight
+                    + Theme.Layout.FloatingChrome.bottomMargin
+                    + Theme.Layout.FloatingChrome.extraPadding
+                : Theme.Layout.scrollBreathingMargin)
+        } else if #available(iOS 26.0, *) {
             // On iOS 26+, the native TabView bottom accessory automatically
             // expands the content safe area insets; keep only the breathing margin.
             Color.clear.frame(height: Theme.Layout.scrollBreathingMargin)

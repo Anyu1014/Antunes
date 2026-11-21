@@ -2,7 +2,7 @@
 .swiftpm/
 .DS_Store
 *.xcodeproj
-!ios/KumoneIOS.xcodeproj
+!ios/Antunes.xcodeproj
 xcuserdata/
 DerivedData/
 outputs/
@@ -12,3 +12,10 @@ ios/Config/CarPlay.local.xcconfig
 ios/Config/Generated/
 # Per-machine TestFlight signing (team ID); see ios/Config/TestFlight.xcconfig
 ios/Config/TestFlight.local.xcconfig
+
+/.cache/
+android/.gradle/
+android/**/build/
+android/local.properties
+android/.signing/
+node_modules/

@@ -15,6 +15,7 @@ final class PlaylistContent: ObservableObject {
     @Published var privileges: [Int: TrackPrivilege] = [:]
     @Published var isLoading = true
     @Published var isLoadingMore = false
+    @Published private(set) var isRefreshing = false
     @Published var errorMessage: String?
     @Published var filter = ""
     private(set) var loadedScope: String?
@@ -37,6 +38,14 @@ final class PlaylistContent: ObservableObject {
         self.tracksLoader = tracksLoader
         self.snapshots = snapshots
         self.accountScope = accountScope
+        if let scope = accountScope(), let saved = snapshots?.cachedSnapshot(id: playlistID, scope: scope) {
+            loadedScope = scope
+            detail = saved.detail
+            tracks = saved.detail.tracks
+            orderedTracks = sortOrder.sorted(tracks)
+            privileges = saved.privileges
+            isLoading = false
+        }
     }
 
     var canDownloadAll: Bool {
@@ -65,22 +74,28 @@ final class PlaylistContent: ObservableObject {
             loadedScope = scope
         }
         removedTrackIDs = []
-        isLoading = tracks.isEmpty
+        isLoading = detail == nil
         isLoadingMore = false
+        isRefreshing = detail != nil
         errorMessage = nil
-        defer { if generation == loadGeneration { isLoading = false; isLoadingMore = false } }
+        defer { if generation == loadGeneration { isLoading = false; isLoadingMore = false; isRefreshing = false } }
         // Without an account scope (the profile is still loading, or failed to)
         // there is no snapshot to read or write; the network still answers.
-        if let scope, let snapshots, let saved = await snapshots.load(id: playlistID, scope: scope) {
+        if let scope, let snapshots {
+            var saved = snapshots.cachedSnapshot(id: playlistID, scope: scope)
+            if saved == nil { saved = await snapshots.load(id: playlistID, scope: scope) }
             guard valid(generation, scope: scope) else { return }
-            let saved = applyingRecommendations(to: saved)
-            detail = saved.detail
-            tracks = saved.detail.tracks
-            privileges = saved.privileges
-            isLoading = false
-            if background, !saved.needsBackgroundRefresh(summary: summary) { return }
+            if let saved {
+                let saved = applyingRecommendations(to: saved)
+                if detail != saved.detail { detail = saved.detail }
+                if tracks != saved.detail.tracks { tracks = saved.detail.tracks }
+                if privileges != saved.privileges { privileges = saved.privileges }
+                isLoading = false
+                if background, !saved.needsBackgroundRefresh(summary: summary) { return }
+            }
         }
         guard valid(generation, scope: scope) else { return }
+        isRefreshing = detail != nil
         if detail == nil, let summary { detail = PlaylistDetail(summary: summary) }
         guard allowNetwork else { return }
         var token: UUID?
@@ -115,8 +130,9 @@ final class PlaylistContent: ObservableObject {
             }
             let known = Dictionary((tracks + loaded.tracks).map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
             loaded.tracks = loaded.trackIds.compactMap { known[$0.id] }
-            detail = loaded
-            tracks = loaded.tracks.filter { !reducedRecommendationIDs.contains($0.id) }
+            if detail != loaded { detail = loaded }
+            let loadedTracks = loaded.tracks.filter { !reducedRecommendationIDs.contains($0.id) }
+            if tracks != loadedTracks { tracks = loadedTracks }
             let ids = Set(loaded.trackIds.map(\.id))
             merge(privileges: response.privileges, retaining: ids)
             isLoading = false
@@ -140,8 +156,9 @@ final class PlaylistContent: ObservableObject {
             let response = try await tracksLoader(chunk)
             guard await current(generation, scope: scope, token: token, background: background) else { return }
             let known = Dictionary((tracks + response.songs).map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
-            tracks = (self.detail?.trackIds ?? []).compactMap { known[$0.id] }
+            let updated = (self.detail?.trackIds ?? []).compactMap { known[$0.id] }
                 .filter { !reducedRecommendationIDs.contains($0.id) && !removedTrackIDs.contains($0.id) }
+            if tracks != updated { tracks = updated }
             merge(privileges: response.privileges)
             await save(scope: scope, token: token)
         }

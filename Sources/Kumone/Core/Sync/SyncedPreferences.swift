@@ -25,6 +25,7 @@ extension SettingsManager {
     var syncPreferenceChanges: AnyPublisher<Void, Never> {
         Publishers.MergeMany([
             $audioQuality.removeDuplicates().map { _ in () }.eraseToAnyPublisher(),
+            $downloadQuality.removeDuplicates().map { _ in () }.eraseToAnyPublisher(),
             $appearance.removeDuplicates().map { _ in () }.eraseToAnyPublisher(),
             $showLyricsTranslation.removeDuplicates().map { _ in () }.eraseToAnyPublisher(),
             $lyricsAnnotation.removeDuplicates().map { _ in () }.eraseToAnyPublisher(),
@@ -40,6 +41,7 @@ extension SettingsManager {
     /// layouts stay local. Unknown fields remain in SyncedPreferences for newer apps.
     var syncPreferences: [String: PreferenceValue] {
         [Keys.quality: .string(audioQuality.rawValue),
+         Keys.downloadQuality: .string(downloadQuality.rawValue),
          Keys.appearance: .string(appearance.rawValue),
          Keys.showTranslation: .boolean(showLyricsTranslation),
          Keys.annotation: .string(lyricsAnnotation.rawValue),
@@ -54,7 +56,7 @@ extension SettingsManager {
         // Validate the entire known projection before any setter runs its side effects.
         for (key, edit) in preferences.fields {
             switch (key, edit.value) {
-            case (Keys.quality, .string(let value)):
+            case (Keys.quality, .string(let value)), (Keys.downloadQuality, .string(let value)):
                 guard AudioQuality(rawValue: value) != nil else { throw SyncError.invalidRecord }
             case (Keys.appearance, .string(let value)):
                 guard AppAppearance(rawValue: value) != nil else { throw SyncError.invalidRecord }
@@ -67,7 +69,7 @@ extension SettingsManager {
             case (Keys.showTranslation, .boolean), (Keys.verbatimLyrics, .boolean),
                  (Keys.unblock, .boolean), (Keys.mainWindowAmbientBackground, .boolean),
                  (Keys.unblockSources, .strings): break
-            case (Keys.quality, _), (Keys.appearance, _), (Keys.annotation, _),
+            case (Keys.quality, _), (Keys.downloadQuality, _), (Keys.appearance, _), (Keys.annotation, _),
                  (Keys.mainWindowAmbientBackgroundIntensity, _), (Keys.showTranslation, _),
                  (Keys.verbatimLyrics, _), (Keys.unblock, _),
                  (Keys.mainWindowAmbientBackground, _), (Keys.unblockSources, _):
@@ -78,8 +80,9 @@ extension SettingsManager {
         let current = syncPreferences
         for (key, edit) in preferences.fields where current[key] != edit.value {
             switch (key, edit.value) {
-            case (Keys.quality, .string(let value)):
-                if let quality = AudioQuality(rawValue: value) { audioQuality = quality }
+            case (Keys.quality, .string), (Keys.downloadQuality, .string):
+                // 音质锁定极高：忽略其它设备推来的档位。
+                break
             case (Keys.appearance, .string(let value)):
                 if let theme = AppAppearance(rawValue: value) { appearance = theme }
             case (Keys.annotation, .string(let value)):

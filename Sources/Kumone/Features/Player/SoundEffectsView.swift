@@ -44,7 +44,7 @@ struct SoundEffectsButton: View {
                 .contentShape(Circle())
         }
         .menuOrder(.fixed)
-        .buttonStyle(.pressable)
+        .buttonStyle(.plain)
         .accessibilityLabel("音效")
         .accessibilityValue(settings.soundEffectPreset.displayName)
         .accessibilityIdentifier("soundEffectsButton")

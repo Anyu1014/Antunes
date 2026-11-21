@@ -1,7 +1,7 @@
 import Foundation
 import os
 
-/// Request endpoints, configured on first launch (``UpstreamSetupView``).
+/// Built-in endpoints; existing stored configuration remains compatible.
 enum Upstream {
 
     /// Stored endpoint configuration.
@@ -12,77 +12,20 @@ enum Upstream {
         let cdn: Int
     }
 
-    /// One first-launch question: a sum, difference, product (plus a
-    /// remainder when needed) or exact quotient, drawn at random.
-    enum Question: Sendable, Equatable {
-        case sum(Int, Int)
-        case difference(Int, Int)
-        case product(Int, Int, plus: Int)
-        case quotient(Int, Int)
-
-        var prompt: String {
-            switch self {
-            case let .sum(a, b): "\(a) + \(b) = ?"
-            case let .difference(a, b): "\(a) − \(b) = ?"
-            case let .product(a, b, 0): "\(a) × \(b) = ?"
-            case let .product(a, b, c): "\(a) × \(b) + \(c) = ?"
-            case let .quotient(a, b): "\(a) ÷ \(b) = ?"
-            }
-        }
-
-        var answer: Int {
-            switch self {
-            case let .sum(a, b): a + b
-            case let .difference(a, b): a - b
-            case let .product(a, b, c): a * b + c
-            case let .quotient(a, b): a / b
-            }
-        }
-
-        func accepts(_ text: String) -> Bool {
-            Int(text.trimmingCharacters(in: .whitespaces)) == answer
-        }
-    }
-
-    /// Expected answers.
-    private static let apiTarget = Int(("£" as Unicode.Scalar).value)
-    private static let cdnTarget = Int(("~" as Unicode.Scalar).value)
-
-    /// A fresh pair of questions.
-    static func drawQuestions() -> (api: Question, cdn: Question) {
-        (question(hitting: apiTarget), question(hitting: cdnTarget))
-    }
-
-    /// A random question whose answer is `target`.
-    static func question(hitting target: Int) -> Question {
-        switch Int.random(in: 0..<4) {
-        case 0:
-            let a = Int.random(in: 11...(target - 11))
-            return .sum(a, target - a)
-        case 1:
-            let a = Int.random(in: (target + 11)...(target * 4))
-            return .difference(a, a - target)
-        case 2:
-            let b = Int.random(in: 3...9)
-            return .product(target / b, b, plus: target % b)
-        default:
-            let b = Int.random(in: 2...9)
-            return .quotient(target * b, b)
-        }
-    }
+    private static let defaultHosts = Hosts(api: 163, cdn: 126)
 
     private static let defaultsKey = "upstream.hosts"
     private static let state = OSAllocatedUnfairLock<Hosts?>(initialState: load())
 
     private static func load() -> Hosts? {
-        guard let data = UserDefaults.standard.data(forKey: defaultsKey) else { return nil }
-        return try? JSONDecoder().decode(Hosts.self, from: data)
+        guard let data = UserDefaults.standard.data(forKey: defaultsKey) else { return defaultHosts }
+        return (try? JSONDecoder().decode(Hosts.self, from: data)) ?? defaultHosts
     }
 
     static var hosts: Hosts? { state.withLock { $0 } }
     static var isConfigured: Bool { hosts != nil }
 
-    /// Stores the answers. Pass `persist: false` from tests.
+    /// Stores endpoint configuration. Pass `persist: false` from tests.
     static func configure(_ hosts: Hosts, persist: Bool = true) {
         state.withLock { $0 = hosts }
         if persist, let data = try? JSONEncoder().encode(hosts) {
@@ -92,7 +35,7 @@ enum Upstream {
     }
 
     static func reset() {
-        state.withLock { $0 = nil }
+        state.withLock { $0 = defaultHosts }
         UserDefaults.standard.removeObject(forKey: defaultsKey)
         NotificationCenter.default.post(name: didChange, object: nil)
     }

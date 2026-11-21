@@ -33,7 +33,7 @@ final class IOSUpdater: NSObject, ObservableObject {
     /// Destination filename for the current download. Set on the main actor in
     /// `download(_:)` before the task starts, then read once from the download
     /// delegate queue — the download is single-flight, so this hand-off is safe.
-    nonisolated(unsafe) private var pendingDownloadFilename = "Kumone.ipa"
+    nonisolated(unsafe) private var pendingDownloadFilename = "Antunes.ipa"
 
     func check(interactive: Bool) {
         phase = .checking
@@ -94,7 +94,7 @@ final class IOSUpdater: NSObject, ObservableObject {
             openReleasePage(release)
             return
         }
-        pendingDownloadFilename = "Kumone-\(release.version).ipa"
+        pendingDownloadFilename = "Antunes-\(release.version).ipa"
         phase = .downloading(0)
         Task {
             do {
@@ -234,7 +234,7 @@ struct IOSUpdaterSheet: View {
                 Image(systemName: "square.and.arrow.down.fill")
                     .font(.system(size: 40)).foregroundStyle(Theme.accent)
                 Text("下载完成").font(.headline)
-                Text("已保存到「文件」App ▸ 我的 iPhone ▸ Kumone。用下方按钮直接导入签名工具（全能签 / ESign 等），或在「文件」里手动打开。")
+                Text("已保存到「文件」App ▸ 我的 iPhone ▸ Antunes。用下方按钮直接导入签名工具（全能签 / ESign 等），或在「文件」里手动打开。")
                     .font(.caption).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                 primaryButton("导入到签名工具") { updater.share(url) }

@@ -93,6 +93,7 @@ final class SearchViewModel: ObservableObject {
 struct SearchView: View {
     @StateObject private var model: SearchViewModel
     @State private var searchText: String = ""
+    @Environment(\.closeSearch) private var closeSearch
 
     init(query: String) {
         _model = StateObject(wrappedValue: SearchViewModel(query: query))
@@ -128,6 +129,20 @@ struct SearchView: View {
         }
         #endif
         .navigationTitle(searchText.isEmpty ? "搜索" : String(localized: "搜索：\(searchText)"))
+        #if os(iOS)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    closeSearch()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 15, weight: .semibold))
+                }
+                .accessibilityLabel("关闭搜索")
+                .accessibilityIdentifier("search-close-button")
+            }
+        }
+        #endif
         .task(id: model.tab) {
             await model.load(tab: model.tab)
         }

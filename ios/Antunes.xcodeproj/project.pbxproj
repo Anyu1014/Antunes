@@ -30,7 +30,7 @@
 		07C790DFE6D836026CD01D00 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		1E04E1B88D02E80377A46D7F /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/Localizable.strings; sourceTree = "<group>"; };
 		2199D32FC69383EC32B19794 /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release.xcconfig; sourceTree = "<group>"; };
-		25934AD73710C9EDB53BDDA0 /* KumoneIOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = KumoneIOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		25934AD73710C9EDB53BDDA0 /* Antunes.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Antunes.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		2F2B9DB0459DCEF7CDE9DE2C /* TestFlight.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = TestFlight.xcconfig; sourceTree = "<group>"; };
 		45602F996F250E88035F23A9 /* KumoneIOSPackage */ = {isa = PBXFileReference; lastKnownFileType = folder; name = KumoneIOSPackage; path = KumoneIOSPackage; sourceTree = SOURCE_ROOT; };
 		568F93291A899D30E78DE035 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "zh-Hans.lproj/Localizable.strings"; sourceTree = "<group>"; };
@@ -77,7 +77,7 @@
 		49A9A6B7173C5F9EDEB542C8 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				25934AD73710C9EDB53BDDA0 /* KumoneIOS.app */,
+				25934AD73710C9EDB53BDDA0 /* Antunes.app */,
 				0646F456C7BF38C0A8ED880E /* KumoneIOSUITests.xctest */,
 			);
 			name = Products;
@@ -165,8 +165,8 @@
 			packageProductDependencies = (
 				2D74B41A7A94ABA39956EC55 /* KumoneIOSFeature */,
 			);
-			productName = KumoneIOS;
-			productReference = 25934AD73710C9EDB53BDDA0 /* KumoneIOS.app */;
+			productName = Antunes;
+			productReference = 25934AD73710C9EDB53BDDA0 /* Antunes.app */;
 			productType = "com.apple.product-type.application";
 		};
 		7F3FA2EAD87A1580A6CD3880 /* KumoneIOSUITests */ = {

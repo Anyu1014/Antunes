@@ -1064,7 +1064,7 @@ final class PlayerService: ObservableObject {
     /// prefetch so both always derive identical keys. Pure: no toasts, no
     /// state changes.
     private func resolveSource(for track: Track) async -> ResolvedSource? {
-        let quality = SettingsManager.shared.audioQuality.rawValue
+        let quality = AudioQuality.exhigh.rawValue  // 音质锁定极高，见 src/AGENTS.md
         lastResolveFailure = nil
         guard !Task.isCancelled else { return nil }
         var data: SongURLData?
@@ -2744,7 +2744,16 @@ final class PlayerService: ObservableObject {
     }
 
     private func applyLyrics(_ response: LyricResponse) {
-        lyrics = LyricsParser.parse(response)
+        // 同一首歌词会被读两次（离线缓存 + 网络），内容一致时不再覆盖，
+        // 否则冷启动后按播放的瞬间歌词会重绘一次，看起来像在闪。
+        let parsed = LyricsParser.parse(response)
+        let unchanged = parsed.count == lyrics.count
+            && zip(parsed, lyrics).allSatisfy { $0.at == $1.at && $0.text == $1.text }
+        if unchanged {
+            currentLyricLRC = response.lrc?.lyric
+            return
+        }
+        lyrics = parsed
         updateLyricsCursor(at: livePlaybackTime)
         currentLyricLRC = response.lrc?.lyric
         persistCurrentLyricsSidecar()
@@ -3863,8 +3872,6 @@ final class PlayerService: ObservableObject {
         playNextList = session.playNext
         source = session.source
         if let mode = RepeatMode(rawValue: session.repeatMode) { repeatMode = mode }
-        isFMMode = session.isFM
-        fmUpcoming = []
         progress = session.progress
         duration = session.currentTrack.duration
         // A received checkpoint is not listening earned on this device.

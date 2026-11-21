@@ -31,7 +31,13 @@ final class TrackProgressState: ObservableObject {
 /// so another track's progress event cannot re-evaluate every visible row.
 @MainActor
 final class TrackDownloadState: ObservableObject {
+    struct MenuJob: Equatable {
+        let id: UUID
+        let status: DownloadStatus
+    }
+
     struct Value: Equatable {
+        var menuJob: MenuJob? = nil
         var jobID: UUID?
         var status: DownloadStatus?
         var isDownloaded = false
@@ -72,6 +78,9 @@ final class DownloadManager: ObservableObject {
     typealias MetadataFetcher = (Track, String) async -> Void
     @Published private(set) var jobs: [DownloadJob] = []
     @Published private(set) var collections: [DownloadCollection] = []
+    /// 每首歌在磁盘上占用的字节数，供「已下载」列表显示大小。
+    @Published private(set) var downloadedBytes: [Int: Int64] = [:]
+
     @Published private(set) var offlineTracks: [OfflineLibraryTrack] = [] {
         didSet { rebuildDownloadIndex() }
     }
@@ -539,7 +548,10 @@ final class DownloadManager: ObservableObject {
     func deleteLocalAudio(trackIDs: Set<Int>) async -> Bool {
         guard !trackIDs.isEmpty else { return true }
         let ids = Set(jobs.filter { trackIDs.contains($0.track.id) && !$0.owners.isEmpty }.map(\.id))
-        return await cancelJobs(ids, deletingTracks: trackIDs)
+        let deleted = await cancelJobs(ids, deletingTracks: trackIDs)
+        // 歌词跟着下载一起删除。
+        for id in trackIDs { OfflineMetadataStore.shared.removeLyrics(trackID: id) }
+        return deleted
     }
 
     func setNetwork(_ value: DownloadNetworkState) {
@@ -952,6 +964,11 @@ final class DownloadManager: ObservableObject {
         let available: [OfflineAudioRecord]
         do { available = try await store.availableRecords(accountScope: scope) }
         catch { return }
+        var sizes: [Int: Int64] = [:]
+        for record in available {
+            sizes[record.descriptor.identity.trackID, default: 0] += max(0, record.descriptor.byteCount)
+        }
+        if accountScope == scope { downloadedBytes = sizes }
         var result: [OfflineLibraryTrack] = []
         for (trackID, assets) in Dictionary(grouping: available, by: { $0.descriptor.identity.trackID }) {
             guard libraryScanID == requestID, accountScope == scope, !Task.isCancelled else { return }
@@ -1111,7 +1128,8 @@ final class DownloadManager: ObservableObject {
         // song's own playability decides, as it does upstream.
         let cachedOffline = network.isKnown && !network.connected && cachedTrackIDs.contains(state.trackID)
         let isOffline = offlineTracksByID[state.trackID] != nil || cachedOffline
-        state.apply(.init(jobID: job?.id, status: job?.status, isDownloaded: downloadedTrackIDs.contains(state.trackID),
+        state.apply(.init(menuJob: jobsByTrackID[state.trackID].map { .init(id: $0.id, status: $0.status) },
+                          jobID: job?.id, status: job?.status, isDownloaded: downloadedTrackIDs.contains(state.trackID),
                           isOffline: isOffline, needsNetwork: network.isKnown && !network.connected && !isOffline,
                           accountScope: accountScope))
         state.progress.apply(job.flatMap { progress.fraction(for: $0) })

@@ -74,6 +74,41 @@ struct ImageThumbnailTests {
         #expect(try cgImage(image).width == 32)
     }
 
+    /// A playlist row caches the 80/96 rendition; the detail hero asks for a
+    /// larger one. Without a same-tick variant lookup the hero's first frames
+    /// draw the placeholder — the cover flash on every push.
+    @Test func residentVariantSeedsALargerRequestWithoutAwaitingTheCache() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let data = try largeCover()
+        let rowURL = try #require(cover.resizedImageURL(96))
+        let heroURL = try #require(cover.resizedImageURL(768))
+        let cache = ImageCache(directory: root, offlineArtwork: { _ in data })
+
+        _ = try #require(await cache.image(for: rowURL))
+        // Not the requested size: only the resident row thumbnail can answer.
+        #expect(cache.cachedImage(for: heroURL) == nil)
+        #expect(try cgImage(#require(cache.cachedPreview(for: heroURL))).width == 96)
+        // The upgrade is still possible, so the preview never becomes final.
+        #expect(try cgImage(#require(await cache.image(for: heroURL))).width == 768)
+    }
+
+    /// Re-entering a playlist after the system trimmed the memory cache must
+    /// still have the cover on the first frame: the rendition is on disk.
+    @Test func diskCachedRenditionSeedsTheFirstFrameWithoutAMemoryHit() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let data = try largeCover()
+        let heroURL = try #require(cover.resizedImageURL(384))
+        try seed(data, url: heroURL, root: root)
+        // A fresh cache has nothing resident: only the disk file can answer.
+        let cache = ImageCache(directory: root, offlineArtwork: { _ in nil })
+        let seeded = try #require(cache.cachedCover(for: heroURL))
+        #expect(try cgImage(seeded).width == 384)
+        // Having seeded memory, the view treats the visit as complete.
+        #expect(cache.cachedImage(for: heroURL) != nil)
+    }
+
     private func largeCover(width: Int = 2_048, height: Int = 1_024) throws -> Data {
         let context = try #require(CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
             bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))

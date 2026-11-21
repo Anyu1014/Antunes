@@ -48,18 +48,32 @@ struct PlaylistSnapshot: Codable {
 /// Library metadata is app data, independent of evictable audio and artwork.
 actor PlaylistSnapshotStore {
     static let shared = PlaylistSnapshotStore(directory: KumonePaths.applicationSupport.appendingPathComponent("playlists"))
-    let directory: URL
+    nonisolated let directory: URL
+    private final class SnapshotBox {
+        let value: PlaylistSnapshot
+        init(_ value: PlaylistSnapshot) { self.value = value }
+    }
+    private nonisolated(unsafe) let memory = NSCache<NSString, SnapshotBox>()
     private var refreshes: [URL: (token: UUID, background: Bool)] = [:]
     private var foregroundRefreshes: [URL: Set<UUID>] = [:]
     private var removedTracks: [URL: Set<Int>] = [:]
     private var recommendationReplacements: [URL: [Int: Track]] = [:]
 
-    init(directory: URL) { self.directory = directory }
+    init(directory: URL) {
+        self.directory = directory
+        memory.countLimit = 32
+    }
+
+    // NSCache is thread-safe; seed a reopened view before its first async load.
+    nonisolated func cachedSnapshot(id: Int, scope: String) -> PlaylistSnapshot? {
+        memory.object(forKey: file(id: id, scope: scope).absoluteString as NSString)?.value
+    }
 
     func load(id: Int, scope: String) -> PlaylistSnapshot? {
         guard let data = try? Data(contentsOf: file(id: id, scope: scope)),
               let snapshot = try? JSONDecoder().decode(PlaylistSnapshot.self, from: data),
               snapshot.detail.id == id else { return nil }
+        memory.setObject(SnapshotBox(snapshot), forKey: file(id: id, scope: scope).absoluteString as NSString)
         return snapshot
     }
 
@@ -121,7 +135,7 @@ actor PlaylistSnapshotStore {
         try write(snapshot, to: url)
     }
 
-    private func file(id: Int, scope: String) -> URL {
+    private nonisolated func file(id: Int, scope: String) -> URL {
         directory.appendingPathComponent(OfflineMetadataStore.key(scope), isDirectory: true)
             .appendingPathComponent("\(id).json")
     }
@@ -130,5 +144,6 @@ actor PlaylistSnapshotStore {
         try DownloadFileProtection.prepareDirectory(url.deletingLastPathComponent())
         try JSONEncoder().encode(snapshot).write(to: url, options: .atomic)
         try DownloadFileProtection.protect(url)
+        memory.setObject(SnapshotBox(snapshot), forKey: url.absoluteString as NSString)
     }
 }

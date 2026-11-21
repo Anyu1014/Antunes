@@ -1,6 +1,6 @@
 # XcodeGen manifest for the iOS app shell.
 # Regenerate the project with: cd ios && xcodegen generate
-name: KumoneIOS
+name: Antunes
 options:
   deploymentTarget:
     iOS: "16.0"
@@ -56,7 +56,7 @@ targets:
     dependencies:
       - target: KumoneIOS
 schemes:
-  KumoneIOS:
+  Antunes:
     build:
       targets:
         KumoneIOS: all

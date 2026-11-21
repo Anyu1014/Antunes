@@ -5,6 +5,7 @@ struct SidebarView: View {
     @Binding var showLogin: Bool
 
     @EnvironmentObject private var account: AccountStore
+    @EnvironmentObject private var settings: SettingsManager
     @State private var showNewPlaylist = false
     @State private var newPlaylistName = ""
     @State private var avatarImage: PlatformImage?
@@ -18,9 +19,13 @@ struct SidebarView: View {
     var body: some View {
         List {
             Section {
-                row(.home, title: "推荐", icon: "house.fill")
-                row(.explore, title: "精选", icon: "square.grid.2x2.fill")
+                if settings.showHome {
+                    row(.home, title: "推荐", icon: "house.fill")
+                }
                 row(.fm, title: "漫游", icon: "wave.3.right.circle.fill")
+                if settings.showExplore {
+                    row(.explore, title: "精选", icon: "square.grid.2x2.fill")
+                }
             }
 
             if !account.hasAuthCookie {
@@ -171,6 +176,7 @@ struct SidebarView: View {
                 // iPad-only entries (macOS has toolbar search + the Cmd+, scene).
                 // The desktop toolbar doesn't surface search/settings on iPad, so
                 // put reliable entries in the always-visible footer (#59/#67).
+                if settings.showSearch {
                 Button {
                     selection = .search
                 } label: {
@@ -182,6 +188,7 @@ struct SidebarView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(Text("搜索"))
+                }
 
                 Button {
                     presentSettingsSheet()

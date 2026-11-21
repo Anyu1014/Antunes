@@ -25,12 +25,12 @@ struct MenuBarPlayer: View {
                         .truncationMode(.tail)
                         .help(player.currentTrack?.name ?? String(localized: "暂无播放"))
 
-                    Text(player.currentTrack?.artistNames ?? "Kumone")
+                    Text(player.currentTrack?.artistNames ?? "Antunes")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
-                        .help(player.currentTrack?.artistNames ?? "Kumone")
+                        .help(player.currentTrack?.artistNames ?? "Antunes")
 
                     if player.hasCurrentTrack {
                         MenuBarPlaybackTime(clock: player.clock, duration: player.duration)
@@ -51,7 +51,7 @@ struct MenuBarPlayer: View {
             Divider()
 
             HStack {
-                Button("打开 Kumone") {
+                Button("打开 Antunes") {
                     dismiss()
                     AppDelegate.shared?.reopenMainWindow()
                 }
@@ -85,7 +85,7 @@ struct MenuBarPlayer: View {
 
                     Divider()
 
-                    Button(String(localized: "退出 Kumone")) {
+                    Button(String(localized: "退出 Antunes")) {
                         NSApp.terminate(nil)
                     }
                 } label: {
@@ -112,14 +112,14 @@ struct MenuBarPlayer: View {
 // MARK: - Subviews
 
 struct MenuBarPlayerLabel: View {
-    @State private var tooltip = "Kumone"
+    @State private var tooltip = "Antunes"
 
     var body: some View {
         Image(nsImage: MenuBarIcon.image)
-            .accessibilityLabel("Kumone")
+            .accessibilityLabel("Antunes")
             .help(tooltip)
             .onReceive(PlayerService.shared.$currentTrack) { track in
-                tooltip = track.map { "\($0.name) — \($0.artistNames)" } ?? "Kumone"
+                tooltip = track.map { "\($0.name) — \($0.artistNames)" } ?? "Antunes"
             }
     }
 }

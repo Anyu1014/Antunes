@@ -16,8 +16,8 @@ public struct KumoneApp: App {
     public init() {}
 
     public var body: some Scene {
-        Window("Kumone", id: "main") {
-            UpstreamGate { MainWindow() }
+        Window("Antunes", id: "main") {
+            MainWindow()
                 .environmentObject(player)
                 .environmentObject(account)
                 .environmentObject(settings)
@@ -32,10 +32,6 @@ public struct KumoneApp: App {
         .windowResizability(.contentMinSize)
         .windowToolbarStyle(.unified)
         .commands {
-            CommandGroup(after: .appInfo) {
-                CheckForUpdatesButton()
-            }
-
             CommandGroup(before: .toolbar) {
                 SidebarCommandButton()
             }

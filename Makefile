@@ -5,11 +5,11 @@
 # configuration — the one CI and every contributor gets — leaves it out entirely.
 # See the CarPlay section of the README.
 #
-# `make project` regenerates ios/KumoneIOS.xcodeproj from ios/project.yml with
+# `make project` regenerates ios/Antunes.xcodeproj from ios/project.yml with
 # XcodeGen; it is only needed after editing project.yml, never for CarPlay.
 
 .DEFAULT_GOAL := help
-.PHONY: help configure configure-carplay project build test app ios-test ios-uitest testflight clean
+.PHONY: help configure configure-carplay project build test app ios-test ios-uitest testflight package clean
 
 help: ## Show this help
 	@echo "Kumone make targets:"
@@ -22,8 +22,11 @@ configure: ## Configure the iOS build (default: CarPlay disabled)
 configure-carplay: ## Configure the iOS build with the CarPlay capability enabled
 	@Scripts/configure-ios.sh --carplay
 
-project: ## Regenerate ios/KumoneIOS.xcodeproj from ios/project.yml (needs xcodegen)
+project: ## Regenerate ios/Antunes.xcodeproj from ios/project.yml (needs xcodegen)
 	@cd ios && xcodegen generate
+
+package: ## 打包发行产物到 build/latest/Antunes-<version>.apk|ipa（默认双端，可传 android / ios）
+	@Scripts/package.sh $(or $(TARGET),all)
 
 build: ## Build the macOS app with SwiftPM
 	@swift build
@@ -41,12 +44,14 @@ ios-test: ## Run the iOS unit tests on a simulator (override with IOS_DESTINATIO
 	@# tests have to be driven through the package's own scheme.
 	@cd ios/KumoneIOSPackage && xcodebuild test \
 		-scheme KumoneIOSFeature \
+		-derivedDataPath ios/DerivedData \
 		-destination '$(IOS_DESTINATION)'
 
 ios-uitest: ## Run the iOS UI tests on a simulator
 	@xcodebuild test \
-		-workspace ios/KumoneIOS.xcworkspace \
-		-scheme KumoneIOS \
+		-workspace ios/Antunes.xcworkspace \
+		-scheme Antunes \
+		-derivedDataPath ios/DerivedData \
 		-destination '$(IOS_DESTINATION)'
 
 TESTFLIGHT_FLAGS := $(if $(filter 1,$(CARPLAY)),--carplay) $(if $(filter 1,$(UPLOAD)),--upload)
@@ -54,8 +59,5 @@ TESTFLIGHT_FLAGS := $(if $(filter 1,$(CARPLAY)),--carplay) $(if $(filter 1,$(UPL
 testflight: ## Archive the iOS app for TestFlight (CARPLAY=1 adds CarPlay, UPLOAD=1 uploads; needs KUMONE_TEAM_ID)
 	@Scripts/testflight.sh $(TESTFLIGHT_FLAGS)
 
-clean: ## Remove build artifacts and generated CarPlay overlays
-	@swift package clean || true
-	@rm -rf .build
-	@rm -f ios/Config/CarPlay.local.xcconfig
-	@rm -rf ios/Config/Generated
+clean: ## Clear disposable .cache only; preserve build products and build-speed caches
+	@Scripts/package.sh clean

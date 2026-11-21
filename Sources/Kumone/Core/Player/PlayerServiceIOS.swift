@@ -754,7 +754,7 @@ final class PlayerService: ObservableObject {
                                 localLease: OfflinePlaybackLease? = nil,
                                 skipsLocalCopies: Bool = false,
                                 resumeAt: TimeInterval = 0) async {
-        let quality = SettingsManager.shared.audioQuality.rawValue
+        let quality = AudioQuality.exhigh.rawValue  // 音质锁定极高，见 src/AGENTS.md
         let allowsUnblock = SettingsManager.shared.canResolveUnblockedTracks
         let cacheEnabled = SettingsManager.shared.enableAudioCache && !skipsLocalCopies
         lastResolveFailure = nil
@@ -1290,7 +1290,8 @@ final class PlayerService: ObservableObject {
         guard generation == resolveGeneration, let response else { return }
         lyrics = LyricsParser.parse(response)
         updateLyricsCursor(at: progress)
-        if let scope, SettingsManager.shared.enableAudioCache || DownloadManager.shared.isDownloaded(trackID: track.id) {
+        // 歌词文本很小：听过就缓存，不依赖「歌曲缓存」开关或是否已下载。
+        if let scope {
             await OfflineMetadataStore.shared.keepPlaybackData(track: track, lyrics: response, scope: scope)
         }
     }
@@ -1676,6 +1677,12 @@ final class PlayerService: ObservableObject {
                 try session.validate()
                 applyPlaybackSession(session)
                 NowPlayingManager.shared.updateMetadata(for: session.currentTrack, duration: duration)
+                // 冷启动就把上次那首的歌词读进内存（命中离线缓存则立刻可显示），
+                // 不必等用户按播放才出现歌词。进度已由 applyPlaybackSession 从
+                // session.progress 恢复。
+                Task {
+                    await loadLyrics(for: session.currentTrack, generation: resolveGeneration)
+                }
             } catch { ToastCenter.shared.show(error.localizedDescription) }
             return
         }

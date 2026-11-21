@@ -4,7 +4,7 @@
 #
 # The switch lives entirely in xcconfig: this script writes (or removes) a small
 # untracked overlay that Config/Shared.xcconfig picks up via `#include?`. It never
-# touches ios/KumoneIOS.xcodeproj, so toggling CarPlay leaves the tracked Xcode
+# touches ios/Antunes.xcodeproj, so toggling CarPlay leaves the tracked Xcode
 # project byte-identical and produces no diff to review.
 #
 # CarPlay is opt-in because `com.apple.developer.carplay-audio` is a restricted

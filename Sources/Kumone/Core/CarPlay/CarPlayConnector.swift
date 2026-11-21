@@ -29,7 +29,7 @@ public final class CarPlayConnector: NSObject {
     private var loadGeneration = 0
 
     // MARK: - Now Playing buttons
-    // like / dislike are created once in didConnect and cached, because their visual state is
+    // like is created once in didConnect and cached, because its visual state is
     // driven by mutable properties (isSelected / isEnabled). shuffle and repeat instead carry
     // their state in the button *image*, and CPNowPlayingImageButton's image is immutable, so
     // those two are rebuilt from scratch on every refresh.
@@ -800,7 +800,6 @@ public final class CarPlayConnector: NSObject {
         tabBar = root
         controller.setRootTemplate(root, animated: false, completion: nil)
         updateLibraryTab()
-        updateFMTab()
         scheduleFullReload(bootstrapIfNeeded: false)
     }
 

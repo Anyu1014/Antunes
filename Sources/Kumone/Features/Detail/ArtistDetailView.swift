@@ -27,6 +27,29 @@ struct ArtistDetailView: View {
     }
 
     var body: some View {
+        Group {
+            #if os(iOS)
+            GeometryReader { geo in
+                if HomeView.splitsLandscape(geo.size) {
+                    landscapeContents(width: geo.size.width)
+                } else {
+                    portraitContents
+                }
+            }
+            .navigationBarTitleDisplayMode(.inline)
+            .frostedNavigationBar()
+            .background(Platform.windowBackgroundColor.ignoresSafeArea())
+            #else
+            portraitContents
+                .navigationTitle(artist?.name ?? String(localized: "歌手"))
+            #endif
+        }
+        .task(id: artistID) {
+            await load()
+        }
+    }
+
+    private var portraitContents: some View {
         TrackListScrollView(trackIDs: hotSongs.map(\.id), style: .compact, spacing: isCompact ? 16 : 26) {
             VStack(alignment: .leading, spacing: isCompact ? 16 : 26) {
                 if let artist {
@@ -110,15 +133,84 @@ struct ArtistDetailView: View {
                 PlayerClearanceSpacer()
             }
         }
-        #if os(macOS)
-        .navigationTitle(artist?.name ?? String(localized: "歌手"))
-        #else
-        .navigationBarTitleDisplayMode(.inline)
-        #endif
-        .task(id: artistID) {
-            await load()
+    }
+
+    #if os(iOS)
+    /// 横屏：左栏艺人信息与分组，右栏热门单曲，两栏各自滚动。
+    @ViewBuilder private func landscapeContents(width: CGFloat) -> some View {
+        HStack(alignment: .top, spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    if let artist {
+                        compactHeader(artist).padding(.horizontal, 16).padding(.top, 12)
+                    } else if isLoading {
+                        loadingHeader
+                    } else if let errorMessage {
+                        ErrorStateView(message: errorMessage) { Task { await load() } }
+                            .frame(minHeight: 240)
+                    }
+                    if !hotSongs.isEmpty {
+                        SectionHeader(title: "热门单曲").padding(.horizontal, 16)
+                    }
+                    albumRow("专辑", albums)
+                    albumRow("EP 与单曲", epsAndSingles)
+                    similarRow
+                }
+                .padding(.bottom, Theme.Layout.playerChromeClearance)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .scrollIndicators(.hidden)
+            .frame(width: max(240, min(420, width * 0.42)))
+
+            Divider().opacity(0.3)
+
+            TrackListScrollView(trackIDs: hotSongs.map(\.id), style: .compact, spacing: 12) {
+                EmptyView()
+            } rows: { layout in
+                TrackListView(tracks: hotSongs, style: .compact, source: .artist(artistID),
+                              context: artist.map { .artist(id: artistID, name: $0.name) }, layout: layout)
+                    .padding(.horizontal, 6)
+            } footer: {
+                PlayerClearanceSpacer()
+            }
         }
     }
+
+    @ViewBuilder private func albumRow(_ title: String, _ items: [AlbumSummary]) -> some View {
+        if !items.isEmpty {
+            SectionHeader(title: LocalizedStringKey(title)).padding(.horizontal, 16)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 16) {
+                    ForEach(items) { albumCard($0) }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var similarRow: some View {
+        if !similar.isEmpty {
+            SectionHeader(title: "相似歌手").padding(.horizontal, 16)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 16) {
+                    ForEach(similar) { sim in
+                        NavigationLink(value: Destination.artist(sim.id)) {
+                            VStack(spacing: 8) {
+                                CachedAsyncImage(url: sim.picUrl?.resizedImageURL(256))
+                                    .frame(width: 80, height: 80)
+                                    .clipShape(Circle())
+                                Text(sim.name)
+                                    .font(.system(size: 12, weight: .medium))
+                                    .lineLimit(1)
+                            }
+                            .frame(width: 80)
+                        }
+                        .buttonStyle(.interactiveCard)
+                    }
+                }
+            }
+        }
+    }
+    #endif
 
     private func load() async {
         isLoading = true

@@ -31,8 +31,8 @@ These rules files are **starting points** - feel free to:
 
 ```
 KumoneIOS/
-├── KumoneIOS.xcworkspace/              # Open this file in Xcode
-├── KumoneIOS.xcodeproj/                # App shell project
+├── Antunes.xcworkspace/              # Open this file in Xcode
+├── Antunes.xcodeproj/                # App shell project
 ├── KumoneIOS/                          # App target (minimal)
 │   ├── Assets.xcassets/                # App-level assets (icons, colors)
 │   ├── KumoneIOSApp.swift              # App entry point

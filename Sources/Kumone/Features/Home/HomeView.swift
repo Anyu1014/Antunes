@@ -109,23 +109,75 @@ struct HomeView: View {
     @StateObject private var model = HomeViewModel.shared
 
     var body: some View {
-        ScrollView {
-            switch model.state {
-            case .idle, .loading:
-                loadingBody
-            case .error(let message):
-                ErrorStateView(message: message) {
-                    Task { await model.reload(loggedIn: account.isLoggedIn) }
+        GeometryReader { geometry in
+            #if os(iOS)
+            if case .loaded = model.state, HomeView.splitsLandscape(geometry.size) {
+                // 横屏：两栏各是独立的 ScrollView，竖滑和横划都只作用于手指所在的
+                // 半屏；文字用设计字号，只让卡片和间距适应半宽，不整体等比缩小。
+                HStack(alignment: .top, spacing: 0) {
+                    landscapeColumn(side: .left, width: geometry.size.width / 2)
+                    landscapeColumn(side: .right, width: geometry.size.width / 2)
                 }
-                .frame(minHeight: 400)
-            case .loaded:
-                loadedBody
+            } else {
+                ScrollView { stateBody(geometry.size) }
             }
+            #else
+            ScrollView { stateBody(geometry.size) }
+            #endif
         }
         .navigationTitle("推荐")
         .task(id: account.isLoggedIn) {
             await model.load(loggedIn: account.isLoggedIn)
         }
+    }
+
+    @ViewBuilder
+    private func stateBody(_ size: CGSize) -> some View {
+        switch model.state {
+        case .idle, .loading:
+            loadingBody
+        case .error(let message):
+            ErrorStateView(message: message) {
+                Task { await model.reload(loggedIn: account.isLoggedIn) }
+            }
+            .frame(minHeight: 400)
+        case .loaded:
+            loadedBody(cardSize: singleColumnCardSize(size))
+        }
+    }
+
+    private func singleColumnCardSize(_ size: CGSize) -> CGFloat {
+        #if os(iOS)
+        return max(1, (size.width - 2 * Theme.Layout.contentInset - 32) / 3)
+        #else
+        return Theme.Layout.fittedShelfCardSize(availableWidth: size.width,
+                                                leadingInset: Theme.Layout.contentInset)
+        #endif
+    }
+
+    #if os(iOS)
+    /// 横屏单栏：自己的滚动视图 + 半宽布局。卡片宽度按半宽重算，字号保持设计值，
+    /// 所以文字不会再跟着卡片一起缩到一半。
+    private func landscapeColumn(side: HomeColumn, width: CGFloat) -> some View {
+        // 半栏里三张 feature 卡要「等比例缩小塞满左半」：内边距和间距同比收一半，
+        // 剩下的宽度三等分（与安卓 --hs:0.5 的算法一致）。
+        let inset = max(8, Theme.Layout.contentInset * 0.5)
+        let gap: CGFloat = 10
+        let featureWidth = max(96, (width - 2 * inset - 2 * gap) / 3)
+        return ScrollView {
+            loadedBody(cardSize: max(1, (width - 2 * Theme.Layout.contentInset - 32) / 3),
+                       featureCardWidth: featureWidth,
+                       featureGap: gap,
+                       columns: side)
+        }
+        .frame(width: width)
+    }
+    #endif
+
+    /// 横屏且宽 >= 540 时推荐页分左右两栏（左：feature 三卡 / 推荐歌单 /
+    /// 雷达歌单；右：排行榜 / 新碟上架 / 推荐歌手），两栏各自独立滚动。
+    static func splitsLandscape(_ size: CGSize) -> Bool {
+        size.width > size.height && size.width >= 540
     }
 
     private var loadingBody: some View {
@@ -145,16 +197,28 @@ struct HomeView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var loadedBody: some View {
-        LazyVStack(alignment: .leading, spacing: Theme.Layout.sectionSpacing) {
+    private func loadedBody(cardSize: CGFloat,
+                            featureCardWidth: CGFloat = FeatureCard.designWidth,
+                            featureGap: CGFloat = 16,
+                            columns: HomeColumn = .all) -> some View {
+        #if os(iOS)
+        let albumRowHeight = cardSize + 50
+        let artistSize = cardSize
+        let artistRowHeight = cardSize + 40
+        #else
+        let albumRowHeight = Theme.Layout.coverShelfHeight
+        let artistSize: CGFloat = 128
+        let artistRowHeight = Theme.Layout.artistShelfHeight
+        #endif
+        return LazyVStack(alignment: .leading, spacing: Theme.Layout.sectionSpacing) {
             // Anonymous users go straight to recommended playlists;
             // the login entry lives in the sidebar / 我的 tab only.
-            if account.isLoggedIn {
-                featureCards
+            if account.isLoggedIn, columns != .right {
+                featureCards(width: featureCardWidth, gap: featureGap)
                     .padding(.top, 8)
             }
 
-            if !model.recommendPlaylists.isEmpty {
+            if columns != .right, !model.recommendPlaylists.isEmpty {
                 Shelf(title: "推荐歌单", rowHeight: Theme.Layout.coverShelfHeight) {
                     ForEach(Array(model.recommendPlaylists.prefix(12).enumerated()), id: \.element.id) { index, playlist in
                         playlistCard(playlist)
@@ -163,7 +227,7 @@ struct HomeView: View {
                 }
             }
 
-            if !model.radarPlaylists.isEmpty {
+            if columns != .right, !model.radarPlaylists.isEmpty {
                 Shelf(title: "雷达歌单", rowHeight: Theme.Layout.coverShelfHeight) {
                     ForEach(model.radarPlaylists) { radar in
                         NavigationLink(value: Destination.radarPlaylist(radar.id)) {
@@ -181,7 +245,7 @@ struct HomeView: View {
                 }
             }
 
-            if !model.toplists.isEmpty {
+            if columns != .left, !model.toplists.isEmpty {
                 Shelf(title: "排行榜", seeAll: nil, rowHeight: Theme.Layout.coverShelfHeight) {
                     ForEach(model.toplists) { toplist in
                         NavigationLink(value: Destination.playlist(toplist.id)) {
@@ -192,36 +256,31 @@ struct HomeView: View {
                 }
             }
 
-            if !model.newAlbums.isEmpty {
-                VStack(alignment: .leading, spacing: Theme.Layout.sectionHeaderSpacing) {
-                    SectionHeader(title: "新碟上架")
-                        .padding(.horizontal, Theme.Layout.contentInset)
-                    GeometryReader { geometry in
-                        let size = Theme.Layout.fittedShelfCardSize(availableWidth: geometry.size.width, leadingInset: Theme.Layout.contentInset)
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            LazyHStack(alignment: .top, spacing: 16) {
-                                ForEach(model.newAlbums) { album in
-                                    albumCard(album, size: size)
-                                }
-                            }
-                            .padding(.horizontal, Theme.Layout.contentInset)
-                            .frame(height: Theme.Layout.coverShelfHeight)
-                        }
-                        .shelfEdgeClip()
+            if columns != .left, !model.newAlbums.isEmpty {
+                Shelf(title: "新碟上架", rowHeight: albumRowHeight) {
+                    ForEach(model.newAlbums) { album in
+                        albumCard(album, size: cardSize)
                     }
-                    .frame(height: Theme.Layout.coverShelfHeight)
                 }
             }
 
-            if !model.topArtists.isEmpty {
-                Shelf(title: "推荐歌手", rowHeight: Theme.Layout.artistShelfHeight) {
+            if columns != .left, !model.topArtists.isEmpty {
+                Shelf(title: "推荐歌手", rowHeight: artistRowHeight) {
                     ForEach(model.topArtists) { artist in
-                        artistCard(artist)
+                        artistCard(artist, size: artistSize)
                     }
                 }
             }
 
-            PlayerClearanceSpacer()
+            if columns == .all, !account.isLoggedIn {
+                Text("部分功能需登录后完全显示。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, Theme.Layout.contentInset)
+            }
+
+            // 横屏分栏时只给右栏加底部让位，避免整块内容被悬浮播放条压住。
+            if columns != .left { PlayerClearanceSpacer() }
         }
         .padding(.top, Theme.Layout.pageTopPadding)
         .padding(.bottom, Theme.Layout.contentInset - 8)
@@ -230,9 +289,9 @@ struct HomeView: View {
 
     // MARK: - Feature cards
 
-    private var featureCards: some View {
+    private func featureCards(width: CGFloat, gap: CGFloat = 16) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 16) {
+            HStack(spacing: gap) {
                 Color.clear.frame(width: max(0, Theme.Layout.contentInset - 16), height: 1)
                 if account.isLoggedIn {
                     NavigationLink(value: Destination.daily) {
@@ -241,7 +300,8 @@ struct HomeView: View {
                             subtitle: "根据你的口味生成",
                             icon: "calendar",
                             coverURL: model.dailyFirstCover?.resizedImageURL(512),
-                            showsDate: true
+                            showsDate: true,
+                            width: width
                         )
                     }
                     .buttonStyle(.plain)
@@ -254,7 +314,8 @@ struct HomeView: View {
                             subtitle: "从喜欢的歌开始漫游",
                             icon: "wave.3.right.circle.fill",
                             gradient: [Color(red: 0.16, green: 0.20, blue: 0.42),
-                                       Color(red: 0.36, green: 0.24, blue: 0.62)]
+                                       Color(red: 0.36, green: 0.24, blue: 0.62)],
+                            width: width
                         )
                     }
                     .buttonStyle(.interactiveCard)
@@ -267,7 +328,8 @@ struct HomeView: View {
                             subtitle: "你的红心歌曲和相似推荐",
                             icon: "heart.circle.fill",
                             gradient: [Color(red: 0.85, green: 0.19, blue: 0.41),
-                                       Color(red: 0.98, green: 0.42, blue: 0.34)]
+                                       Color(red: 0.98, green: 0.42, blue: 0.34)],
+                            width: width
                         )
                     }
                     .buttonStyle(.interactiveCard)
@@ -339,11 +401,11 @@ struct HomeView: View {
         .buttonStyle(.plain)
     }
 
-    private func artistCard(_ artist: ArtistSummary) -> some View {
+    private func artistCard(_ artist: ArtistSummary, size: CGFloat) -> some View {
         NavigationLink(value: Destination.artist(artist.id)) {
             VStack(spacing: 10) {
                 CachedAsyncImage(url: artist.picUrl?.resizedImageURL(256))
-                    .frame(width: 128, height: 128)
+                    .frame(width: size, height: size)
                     .clipShape(Circle())
                     .overlay(Circle().strokeBorder(.primary.opacity(0.08), lineWidth: 0.5))
                 Text(artist.name)
@@ -351,7 +413,11 @@ struct HomeView: View {
                     .foregroundStyle(.primary)
                     .lineLimit(1)
             }
+            #if os(iOS)
+            .frame(width: size)
+            #else
             .frame(width: 140)
+            #endif
         }
         .buttonStyle(.plain)
     }
@@ -393,6 +459,13 @@ struct HomeView: View {
     }
 }
 
+// MARK: - Two-column landscape
+
+/// 推荐页横屏分栏时该栏要渲染哪些板块。
+enum HomeColumn: Equatable {
+    case left, right, all
+}
+
 // MARK: - Feature card
 
 struct FeatureCard: View {
@@ -403,12 +476,25 @@ struct FeatureCard: View {
     var gradient: [Color] = [Color(red: 0.75, green: 0.16, blue: 0.22),
                              Color(red: 0.95, green: 0.35, blue: 0.28)]
     var showsDate = false
+    /// 卡片宽度。推荐页横屏时传入半栏内可分到的宽度，其余场合保持 230pt；
+    /// 高度、内边距、圆角按 `width/230` 同比缩放，字号只按 `textK` 小幅收，
+    /// 保证半屏里文字仍然读得清。
+    var width: CGFloat = FeatureCard.designWidth
+
+    static let designWidth: CGFloat = 230
+    private static let designHeight: CGFloat = 132
+    private var k: CGFloat { width / FeatureCard.designWidth }
+    private var height: CGFloat { FeatureCard.designHeight * k }
+    private var cornerRadius: CGFloat { Theme.Radius.large * min(1, k) }
+    /// 字号缩放：卡片变小的时候文字只跟着收一点点（下限 0.8），
+    /// 否则半屏里 15pt 标题会变成 9pt 看不清。
+    private var textK: CGFloat { max(0.9, k) }
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
             if let coverURL {
                 CachedAsyncImage(url: coverURL)
-                    .frame(width: 230, height: 132)
+                    .frame(width: width, height: height)
                 LinearGradient(colors: [.black.opacity(0.1), .black.opacity(0.68)],
                                startPoint: .top, endPoint: .bottom)
             } else {
@@ -417,34 +503,34 @@ struct FeatureCard: View {
                                center: .topLeading, startRadius: 0, endRadius: 220)
             }
 
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 3 * k) {
                 ZStack {
                     Image(systemName: icon)
-                        .font(.system(size: 22, weight: .medium))
+                        .font(.system(size: 22 * textK, weight: .medium))
                         .foregroundStyle(.white)
                     if showsDate {
                         Text("\(Calendar.current.component(.day, from: .now))")
-                            .font(.system(size: 10, weight: .bold))
+                            .font(.system(size: 10 * textK, weight: .bold))
                             .foregroundStyle(.white)
-                            .offset(y: 3)
+                            .offset(y: 3 * k)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 Text(title)
-                    .font(.system(size: 15, weight: .bold))
+                    .font(.system(size: 15 * textK, weight: .bold))
                     .foregroundStyle(.white)
                 Text(subtitle)
-                    .font(.system(size: 11))
+                    .font(.system(size: 11 * textK))
                     .foregroundStyle(.white.opacity(0.75))
                     .lineLimit(1)
             }
-            .padding(14)
+            .padding(14 * k)
             .shadow(color: .black.opacity(0.4), radius: 2, y: 1)
         }
-        .frame(width: 230, height: 132)
-        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.large, style: .continuous))
+        .frame(width: width, height: height)
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: Theme.Radius.large, style: .continuous)
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .strokeBorder(.white.opacity(0.12), lineWidth: 0.5)
         )
         .contentShape(Rectangle())

@@ -42,6 +42,17 @@ struct MainWindow: View {
         }
     }
 
+    private func ensureVisibleSection() {
+        let hidden: Bool
+        switch selection {
+        case .home: hidden = !settings.showHome
+        case .explore: hidden = !settings.showExplore
+        case .search: hidden = !settings.showSearch
+        default: hidden = false
+        }
+        if hidden { selection = .downloaded; path = [] }
+    }
+
     private var pathBinding: Binding<[Destination]> {
         externalPath ?? $localPath
     }
@@ -235,6 +246,8 @@ struct MainWindow: View {
             if KumonePaths.isOfflineUITest { selection = .downloaded }
             await account.bootstrap()
         }
+        .onAppear(perform: ensureVisibleSection)
+        .onChange(of: settings.homeSectionVisibility) { _ in ensureVisibleSection() }
         .onChange(of: settings.showDesktopLyrics) { _ in
             DesktopLyricsController.shared.sync(with: settings.showDesktopLyrics)
         }

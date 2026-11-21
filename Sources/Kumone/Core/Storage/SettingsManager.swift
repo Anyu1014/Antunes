@@ -28,6 +28,14 @@ enum AudioQuality: String, CaseIterable, Identifiable {
         case .hires: return String(localized: "高解析")
         }
     }
+
+    /// 真正向服务端请求、并用于播放缓存的档位。
+    ///
+    /// 极高（`exhigh`）是逐首验证过、声音与进度条/歌词对得上的那条路径；
+    /// 其余档位拿到的文件在同一条播放链路上会出现音画不同步，因此这里按
+    /// 「其他音质一律以极高为标准」逐档关联到它。设置里用户看到的仍是自己
+    /// 选的档位，`下载音质` 走 `downloadQuality`，不受影响。
+    /// 回滚：删掉这个属性，把调用点改回 `audioQuality.rawValue`。
 }
 
 enum AppAppearance: String, CaseIterable, Identifiable {
@@ -118,7 +126,18 @@ final class SettingsManager: ObservableObject {
     /// the key the same way.
     enum Keys {
         static let quality = "settings.audioQuality"
+        static let downloadQuality = "settings.downloadQuality"
+        /// One-time marker: 1.1 split play/download quality and defaults both to
+        /// lossless, so the old untouched `exhigh` default is not carried over.
+        static let qualitySplit = "settings.qualitySplitToLossless"
         static let appearance = "settings.appearance"
+        static let showHome = "settings.showHome"
+        static let showLibrary = "settings.showLibrary"
+        static let showExplore = "settings.showExplore"
+        static let showSearch = "settings.showSearch"
+        static let showLikedInCreated = "settings.showLikedInCreatedPlaylists"
+        static let searchOffMigrated = "settings.searchOffMigrated"
+        static let showLikedInCreatedMigrated = "settings.showLikedInCreatedMigrated"
         static let nowPlayingMode = "settings.nowPlayingMode"
         static let landscapeNowPlayingStyle = "settings.landscapeNowPlayingStyle"
         static let openAlbumOnArtworkClick = "settings.openAlbumOnArtworkClick"
@@ -130,7 +149,6 @@ final class SettingsManager: ObservableObject {
         static let fmMode = "settings.fmMode"
         static let unblock = "settings.enableUnblock"
         static let unblockSources = "settings.enabledUnblockSources"
-        static let autoCheckUpdates = "settings.autoCheckUpdates"
         static let desktopLyrics = "settings.showDesktopLyrics"
         #if os(macOS)
         static let menuBarPlayer = "settings.showMenuBarPlayer"
@@ -144,6 +162,7 @@ final class SettingsManager: ObservableObject {
         #endif
         static let desktopLyricsCentered = "settings.desktopLyricsCentered"
         static let mainWindowAmbientBackground = "settings.showMainWindowAmbientBackground"
+        static let mainWindowAmbientBackgroundOffMigrated = "settings.mainWindowAmbientBackgroundOffMigrated"
         static let mainWindowAmbientBackgroundIntensity = "settings.mainWindowAmbientBackgroundIntensity"
         static let enableAudioCache = "settings.enableAudioCache"
         static let audioCacheSizeMB = "settings.audioCacheSizeMB"
@@ -154,8 +173,15 @@ final class SettingsManager: ObservableObject {
         #endif
     }
 
+    /// Quality used when streaming.
     @Published var audioQuality: AudioQuality {
         didSet { UserDefaults.standard.set(audioQuality.rawValue, forKey: Keys.quality) }
+    }
+
+    /// Quality used when saving a track. Independent of playback: a lossless
+    /// archive is worth the space even when streaming at a lower level.
+    @Published var downloadQuality: AudioQuality {
+        didSet { UserDefaults.standard.set(downloadQuality.rawValue, forKey: Keys.downloadQuality) }
     }
 
     static let audioCacheSizeRangeMB = 100...10_000
@@ -195,10 +221,40 @@ final class SettingsManager: ObservableObject {
         }
     }
 
+    @Published var showHome: Bool {
+        didSet { UserDefaults.standard.set(showHome, forKey: Keys.showHome) }
+    }
+
+    @Published var showExplore: Bool {
+        didSet { UserDefaults.standard.set(showExplore, forKey: Keys.showExplore) }
+    }
+
+    @Published var showSearch: Bool {
+        didSet { UserDefaults.standard.set(showSearch, forKey: Keys.showSearch) }
+    }
+
+    @Published var showLibrary: Bool {
+        didSet { UserDefaults.standard.set(showLibrary, forKey: Keys.showLibrary) }
+    }
+
+    /// 「我喜欢的音乐」是否也算进「创建的歌单」（默认不算，与安卓端一致）。
+    @Published var showLikedInCreated: Bool {
+        didSet { UserDefaults.standard.set(showLikedInCreated, forKey: Keys.showLikedInCreated) }
+    }
+
+    var homeSectionVisibility: [Bool] { [showHome, showExplore, showSearch, showLibrary] }
+    var onlyLibrarySection: Bool { !homeSectionVisibility.contains(true) }
+    var anySectionEnabled: Bool { showHome || showExplore || showSearch || showLibrary }
+
     @Published var appearance: AppAppearance {
         didSet { UserDefaults.standard.set(appearance.rawValue, forKey: Keys.appearance) }
     }
 
+    #if os(iOS)
+    // iOS 只保留沉浸布局，旧模式键会在启动时清除。
+    let nowPlayingMode: NowPlayingMode = .immersive
+    let landscapeNowPlayingStyle: LandscapeNowPlayingStyle = .immersive
+    #else
     @Published var nowPlayingMode: NowPlayingMode {
         didSet { UserDefaults.standard.set(nowPlayingMode.rawValue, forKey: Keys.nowPlayingMode) }
     }
@@ -211,6 +267,8 @@ final class SettingsManager: ObservableObject {
         }
     }
 
+    #endif
+
     @Published var openAlbumOnArtworkClick: Bool {
         didSet { UserDefaults.standard.set(openAlbumOnArtworkClick, forKey: Keys.openAlbumOnArtworkClick) }
     }
@@ -221,15 +279,6 @@ final class SettingsManager: ObservableObject {
 
     /// Check for updates on launch. When off, no update sheet appears
     /// automatically; the user can still check manually (#42).
-    @Published var autoCheckUpdates: Bool {
-        didSet {
-            UserDefaults.standard.set(autoCheckUpdates, forKey: Keys.autoCheckUpdates)
-            #if os(macOS)
-            UpdaterManager.shared.setAutomaticChecks(autoCheckUpdates)
-            #endif
-        }
-    }
-
     /// Reading shown for Japanese lyrics: a romaji line above, furigana over
     /// the kanji, or nothing.
     @Published var lyricsAnnotation: LyricsAnnotation {
@@ -427,7 +476,12 @@ final class SettingsManager: ObservableObject {
 
     private init() {
         let defaults = UserDefaults.standard
-        audioQuality = defaults.string(forKey: Keys.quality).flatMap(AudioQuality.init) ?? .exhigh
+        // 音质锁定为极高：播放与下载都只用 `exhigh`，不再读旧的档位设置，
+        // 界面上也不再提供选择。旧键保留只为兼容历史数据，值一律写回极高。
+        audioQuality = .exhigh
+        defaults.set(AudioQuality.exhigh.rawValue, forKey: Keys.quality)
+        downloadQuality = .exhigh
+        defaults.set(AudioQuality.exhigh.rawValue, forKey: Keys.downloadQuality)
         enableAudioCache = defaults.object(forKey: Keys.enableAudioCache) as? Bool ?? true
         // A size somebody chose stays chosen; the untouched default becomes automatic.
         audioCacheAutomatic = defaults.object(forKey: Keys.audioCacheAutomatic) as? Bool
@@ -437,10 +491,32 @@ final class SettingsManager: ObservableObject {
         let normalizedAudioCacheSizeMB = Self.normalizedAudioCacheSizeMB(storedAudioCacheSizeMB)
         audioCacheSizeMB = normalizedAudioCacheSizeMB
         defaults.set(normalizedAudioCacheSizeMB, forKey: Keys.audioCacheSizeMB)
+        showHome = defaults.object(forKey: Keys.showHome) as? Bool ?? true
+        showLibrary = defaults.object(forKey: Keys.showLibrary) as? Bool ?? true
+        showExplore = defaults.object(forKey: Keys.showExplore) as? Bool ?? false
+        // 搜索板块默认关闭：老版本默认是开且从未写过这个键，迁移一次；
+        // 用户此前手动开过的（键已存在）保持不动。
+        if defaults.object(forKey: Keys.searchOffMigrated) == nil {
+            defaults.set(false, forKey: Keys.showSearch)
+            defaults.set(true, forKey: Keys.searchOffMigrated)
+        }
+        showSearch = defaults.object(forKey: Keys.showSearch) as? Bool ?? false
+        if defaults.object(forKey: Keys.showLikedInCreatedMigrated) == nil {
+            defaults.set(false, forKey: Keys.showLikedInCreated)
+            defaults.set(true, forKey: Keys.showLikedInCreatedMigrated)
+        }
+        showLikedInCreated = defaults.object(forKey: Keys.showLikedInCreated) as? Bool ?? false
         appearance = defaults.string(forKey: Keys.appearance).flatMap(AppAppearance.init) ?? .auto
+        #if os(macOS)
         nowPlayingMode = defaults.string(forKey: Keys.nowPlayingMode).flatMap(NowPlayingMode.init) ?? .immersive
         landscapeNowPlayingStyle = defaults.string(forKey: Keys.landscapeNowPlayingStyle)
             .flatMap(LandscapeNowPlayingStyle.init) ?? .classic
+        #else
+        // 删除旧键本身就是一次性迁移：不存在时不写入。
+        for key in [Keys.nowPlayingMode, Keys.landscapeNowPlayingStyle] where defaults.object(forKey: key) != nil {
+            defaults.removeObject(forKey: key)
+        }
+        #endif
         openAlbumOnArtworkClick = defaults.object(forKey: Keys.openAlbumOnArtworkClick) as? Bool ?? true
         showLyricsTranslation = defaults.object(forKey: Keys.showTranslation) as? Bool ?? true
         // Carry over the old on/off romaji toggle for anyone who had it on.
@@ -453,7 +529,6 @@ final class SettingsManager: ObservableObject {
         } else {
             enabledAudioSourceIDs = Set(AudioSourceID.allCases)
         }
-        autoCheckUpdates = defaults.object(forKey: Keys.autoCheckUpdates) as? Bool ?? true
         showDesktopLyrics = defaults.object(forKey: Keys.desktopLyrics) as? Bool ?? false
         #if os(macOS)
         automixEnabled = defaults.object(forKey: Keys.automix) as? Bool ?? false
@@ -468,9 +543,14 @@ final class SettingsManager: ObservableObject {
         outputDeviceUID = defaults.string(forKey: Keys.outputDevice) ?? ""
         #endif
         desktopLyricsCentered = defaults.object(forKey: Keys.desktopLyricsCentered) as? Bool ?? false
+        // 主界面环境色默认关闭；老版本默认开启，这里做一次迁移把它关掉。
+        if defaults.object(forKey: Keys.mainWindowAmbientBackgroundOffMigrated) == nil {
+            defaults.set(false, forKey: Keys.mainWindowAmbientBackground)
+            defaults.set(true, forKey: Keys.mainWindowAmbientBackgroundOffMigrated)
+        }
         showMainWindowAmbientBackground = defaults.object(
             forKey: Keys.mainWindowAmbientBackground
-        ) as? Bool ?? true
+        ) as? Bool ?? false
         let storedAmbientBackgroundIntensity = defaults.object(
             forKey: Keys.mainWindowAmbientBackgroundIntensity
         ) as? Double ?? 1

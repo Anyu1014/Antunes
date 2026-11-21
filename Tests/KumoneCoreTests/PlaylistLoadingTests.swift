@@ -17,6 +17,31 @@ import Testing
         return try JSONDecoder().decode(MusicAPI.PlaylistDetailResponse.self, from: JSONSerialization.data(withJSONObject: json))
     }
 
+    @Test(arguments: [false, true])
+    func warmSnapshotIsVisibleBeforeLoadAndDoesNotLeakAcrossAccounts(empty: Bool) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = PlaylistSnapshotStore(directory: root)
+        let ids = empty ? [] : [1, 2]
+        let data = try response(ids: ids, loaded: ids)
+        let online = PlaylistContent(playlistID: 1, snapshots: store, accountScope: { "a" },
+            detailLoader: { _ in data })
+        await online.load()
+
+        let reopened = PlaylistContent(playlistID: 1, snapshots: store, accountScope: { "a" })
+        #expect(reopened.detail == data.playlist && reopened.tracks.map(\.id) == ids)
+        #expect(reopened.orderedTracks.map(\.id) == ids && reopened.loadedScope == "a")
+        #expect(!reopened.isLoading && !reopened.isRefreshing)
+        let otherAccount = PlaylistContent(playlistID: 1, snapshots: store, accountScope: { "b" })
+        #expect(otherAccount.detail == nil && otherAccount.tracks.isEmpty)
+
+        // A disk-restored snapshot also seeds the next view synchronously.
+        let disk = PlaylistSnapshotStore(directory: root)
+        _ = await disk.load(id: 1, scope: "a")
+        let fromDiskCache = PlaylistContent(playlistID: 1, snapshots: disk, accountScope: { "a" })
+        #expect(fromDiskCache.detail == data.playlist && !fromDiskCache.isLoading)
+    }
+
     @Test func freshBackgroundSnapshotSkipsTheNetworkButForegroundStillRefreshes() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -181,9 +206,11 @@ import Testing
         let request = Task { await model.load() }
         for _ in 0..<200 where !gate.entered { try await Task.sleep(for: .milliseconds(5)) }
         #expect(gate.entered && model.tracks.map(\.id) == [1, 2, 3] && !model.isLoading)
+        #expect(model.isRefreshing)
         gate.open()
         await request.value
         #expect(model.tracks.map(\.id) == [1, 2, 3] && model.errorMessage != nil)
+        #expect(!model.isRefreshing)
         #expect(await store.load(id: 1, scope: "a")?.detail.tracks.map(\.id) == [1, 2, 3])
     }
 

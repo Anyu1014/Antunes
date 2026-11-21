@@ -578,7 +578,7 @@ final class CachingAudioResourceLoader: NSObject {
             )
             return
         }
-        Task {
+        Task { [weak self] in
             do {
                 let writeSession = try await cache.beginWrite(
                     trackID: trackID,
@@ -604,7 +604,7 @@ final class CachingAudioResourceLoader: NSObject {
                         } catch {
                             print("Audio cache could not close an unused temporary file: \(error)")
                         }
-                        Task {
+                        Task { [cache, writeSession] in
                             do {
                                 try await cache.discard(writeSession)
                             } catch {
@@ -951,7 +951,7 @@ final class CachingAudioResourceLoader: NSObject {
         let cache = cache
         let contentType = contentType
         let delegateQueue = delegateQueue
-        Task {
+        Task { [weak self] in
             do {
                 switch try await cache.commitAndRetain(
                     writeSession,
@@ -961,7 +961,7 @@ final class CachingAudioResourceLoader: NSObject {
                 case .retained(_, let leaseID):
                     delegateQueue.addOperation { [weak self] in
                         guard let self, !self.cancelled else {
-                            Task {
+                            Task { [cache, leaseID] in
                                 do {
                                     try await cache.release(leaseID)
                                 } catch {
@@ -975,7 +975,7 @@ final class CachingAudioResourceLoader: NSObject {
                 case .deferredDiscard, .rejectedForCurrentLimit:
                     delegateQueue.addOperation { [weak self] in
                         guard let self else {
-                            Task {
+                            Task { [cache, writeSession] in
                                 do {
                                     try await cache.discard(writeSession)
                                 } catch {
@@ -991,7 +991,7 @@ final class CachingAudioResourceLoader: NSObject {
                 let failureDescription = String(describing: error)
                 delegateQueue.addOperation { [weak self] in
                     guard let self else {
-                        Task {
+                        Task { [cache, writeSession] in
                             do {
                                 try await cache.discard(writeSession)
                             } catch {

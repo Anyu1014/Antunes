@@ -161,18 +161,9 @@ struct PlayCountBadge: View {
     }
 }
 
+/// 全局不显示 VIP 标识；保留类型以便各处的调用点不用改。
 struct VIPBadge: View {
-    var body: some View {
-        Text("VIP")
-            .font(.system(size: 8.5, weight: .bold))
-            .foregroundStyle(Theme.accent)
-            .padding(.horizontal, 4)
-            .padding(.vertical, 1)
-            .overlay(
-                RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .stroke(Theme.accent.opacity(0.8), lineWidth: 1)
-            )
-    }
+    var body: some View { EmptyView() }
 }
 
 struct QualityTag: View {
@@ -468,5 +459,36 @@ final class MarqueeTextView: PlatformView {
             view.update(text: text, fontSize: fontSize, weight: weight)
         }
         #endif
+    }
+}
+
+// MARK: - Locate glyph
+
+/// 定位当前歌曲：实心圆点 + 四段断环，缺口落在四个斜角上。
+/// iOS 与 Android（`icons.locate`）共用同一条几何，避免两端图标不一致。
+struct LocateGlyph: View {
+    var size: CGFloat = 20
+    var color: Color = .primary
+
+    /// 参考图按 48×48 画：环半径 15、描边 3.2、圆点半径 6.2。
+    private var scale: CGFloat { size / 48 }
+
+    var body: some View {
+        ZStack {
+            ForEach(Array(stride(from: 58.0, to: 360.0, by: 90.0)), id: \.self) { start in
+                Path { path in
+                    path.addArc(center: CGPoint(x: size / 2, y: size / 2),
+                                radius: 15 * scale,
+                                startAngle: .degrees(start),
+                                endAngle: .degrees(start + 64),
+                                clockwise: false)
+                }
+                .stroke(color, style: StrokeStyle(lineWidth: 3.2 * scale, lineCap: .round))
+            }
+            Circle()
+                .fill(color)
+                .frame(width: 12.4 * scale, height: 12.4 * scale)
+        }
+        .frame(width: size, height: size)
     }
 }

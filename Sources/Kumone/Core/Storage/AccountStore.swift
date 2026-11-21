@@ -37,7 +37,10 @@ final class AccountStore: ObservableObject {
 
     var createdPlaylists: [PlaylistSummary] {
         guard let uid = profile?.userId else { return [] }
-        return userPlaylists.filter { $0.creator?.userId == uid && !$0.isLikedSongsList }
+        // 「我喜欢的音乐」的 creator 就是自己；默认不把它算进「创建的歌单」，
+        // 设置里打开开关后才并入（与安卓端同语义）。
+        let includeLiked = SettingsManager.shared.showLikedInCreated
+        return userPlaylists.filter { $0.creator?.userId == uid && (includeLiked || !$0.isLikedSongsList) }
     }
 
     var subscribedPlaylists: [PlaylistSummary] {

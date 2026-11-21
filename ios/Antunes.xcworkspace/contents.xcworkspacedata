@@ -5,6 +5,6 @@
       location = "group:KumoneIOSPackage">
    </FileRef>
    <FileRef
-      location = "container:KumoneIOS.xcodeproj">
+      location = "container:Antunes.xcodeproj">
    </FileRef>
 </Workspace>

@@ -626,6 +626,8 @@ struct TrackListView: View {
     /// search shows a subset but passes the whole list, so a result plays in
     /// its place in the playlist rather than as a queue of matches.
     var queue: [Track]?
+    /// 每首歌的磁盘占用文字（如「12.0 MB」），用于「已下载」列表。
+    var sizeLabels: [Int: String] = [:]
 
     // Playback state belongs to TrackRow; the list only starts playback.
     private let player = PlayerService.shared
@@ -648,6 +650,7 @@ struct TrackListView: View {
     private func rows(in range: Range<Int>) -> some View {
         ForEach(range.map { (index: $0, track: tracks[$0]) }, id: \.track.id) { index, _ in
             row(at: index)
+                .id(tracks[index].id)
         }
     }
 
@@ -659,6 +662,7 @@ struct TrackListView: View {
             index: style == .albumTrack ? (track.trackNo > 0 ? track.trackNo : index + 1) : index + 1,
             style: style,
             playability: playability(of: track),
+            trailingText: sizeLabels[track.id],
             removableFromPlaylistID: removableFromPlaylistID,
             onRemoved: { onRemoved?(track) },
             onRecommendationReplaced: recommendationContext == nil || recommendationHandler == nil
@@ -714,7 +718,10 @@ struct TrackListView: View {
 // MARK: - Add to playlist
 
 struct AddToPlaylistSheet: View {
-    let track: Track
+    let tracks: [Track]
+
+    init(track: Track) { self.tracks = [track] }
+    init(tracks: [Track]) { self.tracks = tracks }
 
     @EnvironmentObject private var account: AccountStore
     @Environment(\.dismiss) private var dismiss
@@ -796,13 +803,13 @@ struct AddToPlaylistSheet: View {
     }
 
     private func add(to playlist: PlaylistSummary) {
-        guard !isBusy else { return }
+        guard !isBusy, !tracks.isEmpty else { return }
         statusMessage = nil
         busyPlaylistID = playlist.id
         Task {
             defer { busyPlaylistID = nil }
             do {
-                try await MusicAPI.playlistTracks(op: "add", playlistID: playlist.id, trackIDs: [track.id])
+                try await MusicAPI.playlistTracks(op: "add", playlistID: playlist.id, trackIDs: tracks.map(\.id))
                 await finishSuccess(playlistName: playlist.name)
             } catch {
                 await finishFailure(error)
@@ -812,14 +819,14 @@ struct AddToPlaylistSheet: View {
 
     private func createAndAdd() {
         let name = newName.trimmingCharacters(in: .whitespaces)
-        guard !name.isEmpty, !isBusy else { return }
+        guard !name.isEmpty, !isBusy, !tracks.isEmpty else { return }
         statusMessage = nil
         creating = true
         Task {
             defer { creating = false }
             do {
                 if let id = try await MusicAPI.createPlaylist(name: name, isPrivate: false) {
-                    try await MusicAPI.playlistTracks(op: "add", playlistID: id, trackIDs: [track.id])
+                    try await MusicAPI.playlistTracks(op: "add", playlistID: id, trackIDs: tracks.map(\.id))
                     await finishSuccess(playlistName: name)
                 }
             } catch {

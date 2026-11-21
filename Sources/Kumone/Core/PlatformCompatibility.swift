@@ -54,6 +54,10 @@ public enum Platform {
     public static var windowBackgroundColor: Color {
         Color(nsColor: .windowBackgroundColor)
     }
+
+    public static func open(_ url: URL) {
+        NSWorkspace.shared.open(url)
+    }
 }
 
 #elseif os(iOS)
@@ -109,6 +113,10 @@ public enum Platform {
 
     public static var windowBackgroundColor: Color {
         Color(uiColor: .systemBackground)
+    }
+
+    public static func open(_ url: URL) {
+        UIApplication.shared.open(url)
     }
 }
 #endif

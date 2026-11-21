@@ -21,8 +21,6 @@ struct NowPlayingView: View {
     @State private var loadedArtwork = CachedImageState()
     @State private var loadedArtworkColors: ArtworkColors = .fallback
     #endif
-    @State private var activeIndex: Int?
-    @State private var isUserScrolling = false
     @State private var showLyricsOnMobile = false
     @State private var showQueueOnMobile = false
     /// Lyrics or comments in the regular page's right column (macOS, iPad).
@@ -32,11 +30,17 @@ struct NowPlayingView: View {
     /// Held here rather than by the controls so the panel can sit above the
     /// whole page, with a catcher that closes it on a tap anywhere else.
     @State private var showsVolumeControl = false
+    /// 底部「评论区」按钮弹出的评论面板。
+    @State private var bottomCommentsTrack: Track?
     #endif
 
     var body: some View {
         GeometryReader { geo in
+            #if os(iOS)
+            let isCompact = geo.size.width < 720 && geo.size.width <= geo.size.height
+            #else
             let isCompact = geo.size.width < 720
+            #endif
             ZStack {
                 backdrop
 
@@ -209,19 +213,6 @@ struct NowPlayingView: View {
         .buttonStyle(.pressable)
     }
 
-    /// Jump straight to the line the song is on. Used when the view appears,
-    /// where waiting for the next line change would leave the lyrics parked at
-    /// the top. Scrolling is deferred a turn: the list has not laid out yet
-    /// while `onAppear` runs, and `scrollTo` on an unlaid list does nothing.
-    private func adoptCursor(proxy: ScrollViewProxy) {
-        let index = lyricsCursor.activeIndex
-        activeIndex = index
-        guard let index else { return }
-        DispatchQueue.main.async {
-            proxy.scrollTo(index, anchor: .center)
-        }
-    }
-
     // MARK: - Backdrop
 
     private var artworkImage: PlatformImage? {
@@ -311,224 +302,74 @@ struct NowPlayingView: View {
     }
 
     #if os(iOS)
-    /// Full-screen karaoke page for iPhone landscape / iPad. The scrubber is
-    /// deliberately absent: the sung line and its wipe own the middle of the
-    /// screen, the track sits at the bottom-left and the transport at the
-    /// bottom-right, over a slowly drifting artwork backdrop.
+    /// Reference layout: cover and transport at left, lyrics or comments at right.
     private func landscapeImmersiveLayout(size: CGSize) -> some View {
-        ZStack {
-            AnimatedKaraokeBackdrop(
-                image: artworkImage, colors: colors,
-                // A full-screen blur redrawn 24 times a second is not worth it
-                // while nothing moves or the queue covers the lyrics.
-                isPaused: !player.isPlaying || showQueueOnMobile
-            )
-
-            VStack(spacing: 0) {
-                landscapeUtilityRow
-                    .padding(.top, 18)
-                    .padding(.trailing, 24)
-
-                Group {
-                    if showQueueOnMobile {
-                        CompactQueueContent()
-                            .transition(.opacity)
-                    } else {
-                        lyricsScroll(
-                            topInset: max(12, size.height * 0.06),
-                            bottomInset: max(20, size.height * 0.10),
-                            horizontalPadding: 60,
-                            karaoke: true
-                        )
-                        .transition(.opacity)
-                    }
-                }
-                .frame(maxWidth: 1000)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .animation(.easeInOut(duration: 0.2), value: showQueueOnMobile)
-
-                HStack(alignment: .center, spacing: 14) {
-                    landscapeNowPlayingMetadata
-                    Spacer(minLength: 12)
+        let gap = min(26, max(12, size.height * 0.06))
+        let side = min(48, max(24, size.width * 0.05))
+        let artworkSize = min(168, max(68, size.height * 0.26))
+        let lyricInset = max(42, size.height * 0.4)
+        return HStack(spacing: side) {
+            VStack(spacing: gap) {
+                artworkView(size: artworkSize)
+                trackMetaView
+                VStack(spacing: 14) {
+                    NowPlayingScrubber()
                     landscapeTransportRow
                 }
-                .padding(.horizontal, 28)
-                .padding(.bottom, max(16, size.height * 0.03))
             }
-        }
-    }
+            .frame(maxWidth: 380)
+            .frame(maxWidth: .infinity)
 
-    private var landscapeUtilityRow: some View {
-        HStack(spacing: 10) {
-            Spacer(minLength: 0)
-
-            SoundEffectsButton(action: { showSoundEffects = true })
-
-            circleButton(
-                icon: "list.bullet", size: 15,
-                tint: showQueueOnMobile ? Theme.accent : nil
-            ) {
-                withAnimation(AppAnimation.standard) {
-                    showQueueOnMobile.toggle()
+            Group {
+                if regularColumnPage == .comments, let track = commentsTrack {
+                    RegularCommentsPanel(track: track)
+                        .id(track.id)
+                } else {
+                    lyricsScroll(topInset: lyricInset, bottomInset: lyricInset, horizontalPadding: 4)
                 }
             }
-            .accessibilityLabel(showQueueOnMobile ? "关闭播放队列" : "显示播放队列")
-
-            RoutePickerButton(diameter: 40, glyphSize: 16)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-    }
-
-    private var landscapeNowPlayingMetadata: some View {
-        HStack(spacing: 12) {
-            artworkView(size: 52, shadowRadius: 10, cornerRadius: 12)
-
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(player.currentTrack?.name ?? "")
-                        .font(.system(size: 17, weight: .bold))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                    if player.currentTrack?.fee == 1 {
-                        VIPBadge()
-                    }
-                }
-                if let track = player.currentTrack {
-                    NowPlayingTrackDestinationLinks(
-                        track: track,
-                        font: .system(size: 12),
-                        color: .white.opacity(0.62),
-                        onOpenDestination: onOpenDestination
-                    )
-                    .lineLimit(1)
-                }
-            }
-        }
-        .frame(maxWidth: 360, alignment: .leading)
+        .frame(maxWidth: 1040)
+        .padding(.horizontal, side)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var landscapeTransportRow: some View {
-        HStack(spacing: 14) {
-            circleButton(icon: "backward.fill", size: 18) {
-                player.previous()
-            }
-            .accessibilityLabel("上一首")
-
-            playPauseButton(diameter: 50, glyphSize: 20)
-
-            circleButton(icon: "forward.fill", size: 18) {
-                player.next()
-            }
-            .accessibilityLabel("下一首")
-
-            if let track = player.currentTrack {
-                let liked = account.isLiked(track.id)
-                Button {
-                    Task { await account.toggleLike(trackID: track.id) }
-                } label: {
-                    Image(systemName: liked ? "heart.fill" : "heart")
-                        .font(.system(size: 20, weight: .medium))
-                        .foregroundStyle(liked ? Theme.accent : .white.opacity(0.85))
-                        .frame(width: 40, height: 40)
-                        .contentShape(Rectangle())
+        let showsComments = regularColumnPage == .comments && commentsTrack != nil
+        return HStack(spacing: 0) {
+            Group {
+                if let track = player.currentTrack {
+                    let liked = account.isLiked(track.id)
+                    circleButton(icon: liked ? "heart.fill" : "heart", size: 15, tint: liked ? Theme.accent : nil) {
+                        Task { await account.toggleLike(trackID: track.id) }
+                    }
+                    .accessibilityLabel(liked ? "取消喜欢" : "喜欢")
+                } else {
+                    Color.clear.frame(width: 40, height: 40)
                 }
-                .buttonStyle(.pressable)
-                .accessibilityLabel(liked ? "取消喜欢" : "喜欢")
-            } else {
-                // Keep the trailing slot so the transport never shifts.
-                Color.clear.frame(width: 40, height: 40)
             }
+            .frame(maxWidth: .infinity)
+
+            circleButton(icon: "backward.fill", size: 16) { player.previous() }
+                .accessibilityLabel("上一首")
+                .frame(maxWidth: .infinity)
+            playPauseButton()
+                .frame(maxWidth: .infinity)
+            circleButton(icon: "forward.fill", size: 16) { player.next() }
+                .accessibilityLabel("下一首")
+                .frame(maxWidth: .infinity)
+
+            circleButton(icon: showsComments ? "quote.bubble" : "text.bubble",
+                         size: 16, tint: showsComments ? Theme.accent : nil) {
+                regularColumnPage = showsComments ? .lyrics : .comments
+            }
+            .disabled(commentsTrack == nil)
+            .accessibilityLabel(showsComments ? "显示歌词" : "显示评论")
+            .accessibilityAddTraits(showsComments ? .isSelected : [])
+            .frame(maxWidth: .infinity)
         }
         .accessibilityIdentifier("landscapeTransportRow")
-    }
-
-    /// A continuously moving backdrop for the karaoke page: the blurred cover
-    /// drifts and breathes while two artwork-tinted glows slide across it.
-    ///
-    /// `TimelineView` drives the phase rather than a `repeatForever`
-    /// animation on `@State`: the artwork image arrives asynchronously, and an
-    /// image inserted after the animation started inherited its end value and
-    /// stayed still — the reported "动态背景不动".
-    private struct AnimatedKaraokeBackdrop: View {
-        let image: PlatformImage?
-        let colors: ArtworkColors
-        var isPaused = false
-
-        @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-        private static let cycle: TimeInterval = 18
-
-        var body: some View {
-            // Reduce Motion holds the backdrop at its rest pose instead of
-            // redrawing a full-screen blur 24 times a second.
-            TimelineView(.animation(minimumInterval: 1.0 / 24.0, paused: reduceMotion || isPaused)) { context in
-                let t = context.date.timeIntervalSinceReferenceDate
-                let sway = reduceMotion ? 0 : sin(t * 2 * .pi / Self.cycle)
-                let breathe = reduceMotion ? 0 : cos(t * 2 * .pi / (Self.cycle * 0.78))
-
-                GeometryReader { geo in
-                    ZStack {
-                        LinearGradient(
-                            colors: [colors.primary, colors.secondary],
-                            startPoint: .topLeading, endPoint: .bottomTrailing
-                        )
-
-                        if let image {
-                            Image(platformImage: image)
-                                .resizable()
-                                .scaledToFill()
-                                .frame(
-                                    width: geo.size.width * 1.5,
-                                    height: geo.size.height * 1.5
-                                )
-                                .blur(radius: 70)
-                                .drawingGroup()
-                                .rotationEffect(.degrees(2.5 * sway))
-                                .scaleEffect(1.02 + 0.08 * breathe)
-                                .offset(
-                                    x: geo.size.width * 0.06 * sway,
-                                    y: geo.size.height * 0.05 * breathe
-                                )
-                                .opacity(0.62)
-                        }
-
-                        RadialGradient(
-                            colors: [colors.primary.opacity(0.55), .clear],
-                            center: .center, startRadius: 0,
-                            endRadius: geo.size.width * 0.75
-                        )
-                        .frame(width: geo.size.width * 1.2, height: geo.size.width * 1.2)
-                        .offset(
-                            x: -geo.size.width * 0.28 + 60 * sway,
-                            y: -geo.size.height * 0.22 + 40 * breathe
-                        )
-                        .blendMode(.plusLighter)
-                        .drawingGroup()
-
-                        RadialGradient(
-                            colors: [colors.secondary.opacity(0.5), .clear],
-                            center: .center, startRadius: 0,
-                            endRadius: geo.size.width * 0.7
-                        )
-                        .frame(width: geo.size.width, height: geo.size.width)
-                        .offset(
-                            x: geo.size.width * 0.3 - 50 * breathe,
-                            y: geo.size.height * 0.25 - 30 * sway
-                        )
-                        .blendMode(.plusLighter)
-                        .drawingGroup()
-
-                        LinearGradient(
-                            colors: [.black.opacity(0.16), .black.opacity(0.5)],
-                            startPoint: .top, endPoint: .bottom
-                        )
-                    }
-                    .frame(width: geo.size.width, height: geo.size.height)
-                    .clipped()
-                }
-            }
-            .ignoresSafeArea()
-            .accessibilityHidden(true)
-        }
     }
     #endif
 
@@ -567,7 +408,9 @@ struct NowPlayingView: View {
 
             CompactTrackHeader(
                 showsExpandedArtwork: showsVinyl,
-                onOpenDestination: onOpenDestination
+                onOpenDestination: onOpenDestination,
+                onOpenSoundEffects: { showSoundEffects = true },
+                onToggleVolume: { showsVolumeControl.toggle() }
             )
                 .padding(.bottom, 10)
             #else
@@ -711,7 +554,9 @@ struct NowPlayingView: View {
             CompactTrackHeader(
                 showsExpandedArtwork: showsExpandedArtwork,
                 onOpenDestination: onOpenDestination,
-                onTapArtwork: collapseImmersiveArtwork
+                onTapArtwork: collapseImmersiveArtwork,
+                onOpenSoundEffects: { showSoundEffects = true },
+                onToggleVolume: { showsVolumeControl.toggle() }
             )
             .padding(.bottom, 14)
 
@@ -726,7 +571,7 @@ struct NowPlayingView: View {
                         .transition(.opacity)
                 } else {
                     NowPlayingLyricsPager(isShown: showLyricsOnMobile, horizontalInset: 32) {
-                        IOSImmersiveLyricsColumn()
+                        IOSImmersiveLyricsColumn(isVisible: showLyricsOnMobile)
                     }
                         .opacity(showLyricsOnMobile ? 1 : 0)
                         .allowsHitTesting(showLyricsOnMobile)
@@ -807,12 +652,18 @@ struct NowPlayingView: View {
                 showsQueue: showQueueOnMobile,
                 onToggleLyrics: toggleImmersiveLyrics,
                 onToggleQueue: toggleImmersiveQueue,
+                onOpenComments: { bottomCommentsTrack = player.currentTrack },
                 onOpenSoundEffects: { showSoundEffects = true }
             )
         }
         .padding(.top, 14)
         .padding(.bottom, 10)
         .accessibilityIdentifier("immersiveControls")
+        #if os(iOS)
+        .sheet(item: $bottomCommentsTrack) { track in
+            SongCommentsView(track: track)
+        }
+        #endif
     }
 
     private func immersiveArtworkContent(artworkDimension: CGFloat) -> some View {
@@ -824,8 +675,11 @@ struct NowPlayingView: View {
                     key: ImmersiveArtworkFramePreferenceKey.self,
                     value: .bounds
                 ) { [.expanded: $0] }
-            MiniLyricsView(onOpen: showImmersiveLyrics)
-                .frame(maxWidth: .infinity, maxHeight: 96)
+            MiniLyricsView(
+                isVisible: !showLyricsOnMobile && !showQueueOnMobile,
+                onOpen: showImmersiveLyrics
+            )
+            .frame(maxWidth: .infinity, maxHeight: 96)
             Spacer(minLength: 0)
         }
     }
@@ -1352,155 +1206,16 @@ struct NowPlayingView: View {
     private func lyricsScroll(
         topInset: CGFloat,
         bottomInset: CGFloat,
-        horizontalPadding: CGFloat,
-        karaoke: Bool = false
+        horizontalPadding: CGFloat
     ) -> some View {
-        if let lyrics = player.lyrics, !lyrics.isEmpty {
-            ScrollViewReader { proxy in
-                ScrollView(showsIndicators: false) {
-                    LazyVStack(alignment: karaoke ? .center : .leading,
-                               spacing: karaoke ? 20 : 26) {
-                        Color.clear.frame(height: topInset)
-                        ForEach(lyrics.lines) { line in
-                            Group {
-                                if karaoke {
-                                    landscapeKaraokeLine(line, isActive: line.id == activeIndex)
-                                } else {
-                                    bigLyricLine(line, isActive: line.id == activeIndex)
-                                }
-                            }
-                            .id(line.id)
-                        }
-                        Color.clear.frame(height: bottomInset)
-                    }
-                    .padding(.horizontal, horizontalPadding)
-                }
-                // Inside the per-track identity so a mid-flick track change
-                // tears the tracking down with the list and clears the flag.
-                .lyricsScrollTracking(isUserScrolling: $isUserScrolling)
-                // A new track gets a fresh list: reusing the old scroll view
-                // crossfaded the outgoing and incoming lines on top of each
-                // other for one frame while `lyrics` reloaded.
-                .id(player.currentTrack?.id)
-                .mask(
-                    LinearGradient(
-                        stops: [
-                            .init(color: .clear, location: 0),
-                            .init(color: .black, location: 0.12),
-                            .init(color: .black, location: 0.85),
-                            .init(color: .clear, location: 1),
-                        ],
-                        startPoint: .top, endPoint: .bottom
-                    )
-                )
-                .onChange(of: lyricsCursor.activeIndex) { index in
-                    guard index != activeIndex else { return }
-                    activeIndex = index
-                    guard !isUserScrolling, let index else { return }
-                    withAnimation(.spring(response: 0.8, dampingFraction: 0.85)) {
-                        proxy.scrollTo(index, anchor: .center)
-                    }
-                }
-                .onAppear {
-                    // The cursor only fires on a line change, which can be many
-                    // seconds away — on re-entering the page, adopt where the
-                    // song already is instead of waiting for the next line.
-                    adoptCursor(proxy: proxy)
-                }
-                .onChange(of: player.currentTrack?.id) { _ in
-                    activeIndex = nil
-                    isUserScrolling = false
-                }
-            }
-        } else if player.lyrics?.isInstrumental == true {
-            VStack(spacing: 10) {
-                Image(systemName: "music.quarternote.3")
-                    .font(.system(size: 36, weight: .light))
-                    .foregroundStyle(.white.opacity(0.4))
-                Text("纯音乐，请欣赏")
-                    .font(.system(size: 15))
-                    .foregroundStyle(.white.opacity(0.6))
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-            ProgressView()
-                .controlSize(.small)
-                .tint(.white)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
+        // 实现见 PlayerLyricsList：播放页与漫游横屏共用同一份歌词视图。
+        PlayerLyricsList(
+            topInset: topInset,
+            bottomInset: bottomInset,
+            horizontalPadding: horizontalPadding
+        )
     }
 
-    private func bigLyricLine(_ line: LyricLine, isActive: Bool) -> some View {
-        Button {
-            player.seek(to: line.time)
-        } label: {
-            VStack(alignment: .leading, spacing: 5) {
-                if settings.lyricsAnnotation == .romaji, let romaji = line.romaji {
-                    Text(romaji)
-                        .font(.system(size: isActive ? 15 : 13, weight: .medium))
-                        .foregroundStyle(.white.opacity(isActive ? 0.7 : 0.35))
-                }
-                LyricMainText(
-                    line: line, isActive: isActive,
-                    size: isActive ? 26 : 20, weight: isActive ? .bold : .semibold,
-                    verbatim: settings.verbatimLyrics
-                )
-                if settings.showLyricsTranslation, let translation = line.translation {
-                    Text(translation)
-                        .font(.system(size: isActive ? 16 : 14, weight: .medium))
-                        .foregroundStyle(.white.opacity(isActive ? 0.7 : 0.35))
-                }
-            }
-            .multilineTextAlignment(.leading)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-            .blur(radius: isActive || isUserScrolling ? 0 : 0.6)
-            .scaleEffect(isActive ? 1.02 : 1, anchor: .leading)
-        }
-        .buttonStyle(.plain)
-        .animation(.spring(response: 0.4, dampingFraction: 0.8), value: isActive)
-        .animation(.easeOut(duration: 0.25), value: isUserScrolling)
-    }
-
-    /// Centre-aligned karaoke line for the landscape page. The active line is
-    /// large and carries the verbatim wipe like a KTV subtitle; the neighbours
-    /// stay smaller and dimmer so the eye follows the sung line.
-    private func landscapeKaraokeLine(_ line: LyricLine, isActive: Bool) -> some View {
-        Button {
-            player.seek(to: line.time)
-        } label: {
-            VStack(spacing: 7) {
-                if settings.lyricsAnnotation == .romaji, let romaji = line.romaji {
-                    Text(romaji)
-                        .font(.system(size: isActive ? 16 : 13, weight: .medium))
-                        .foregroundStyle(.white.opacity(isActive ? 0.7 : 0.3))
-                }
-                LyricMainText(
-                    line: line, isActive: isActive,
-                    size: isActive ? 32 : 21,
-                    weight: isActive ? .bold : .medium,
-                    verbatim: settings.verbatimLyrics,
-                    alignment: .center
-                )
-                if settings.showLyricsTranslation, let translation = line.translation {
-                    Text(translation)
-                        .font(.system(size: isActive ? 17 : 14, weight: .medium))
-                        .foregroundStyle(.white.opacity(isActive ? 0.72 : 0.3))
-                }
-            }
-            .multilineTextAlignment(.center)
-            .frame(maxWidth: .infinity, alignment: .center)
-            .contentShape(Rectangle())
-            .opacity(isActive ? 1 : 0.6)
-            .scaleEffect(isActive ? 1 : 0.97)
-            .blur(radius: isActive || isUserScrolling ? 0 : 0.4)
-            .shadow(color: .black.opacity(isActive ? 0.45 : 0),
-                    radius: isActive ? 18 : 0, y: isActive ? 6 : 0)
-        }
-        .buttonStyle(.plain)
-        .animation(.spring(response: 0.4, dampingFraction: 0.85), value: isActive)
-        .animation(.easeOut(duration: 0.25), value: isUserScrolling)
-    }
 }
 
 
@@ -1518,6 +1233,9 @@ struct LyricMainText: View {
     let verbatim: Bool
     var inactiveOpacity: Double = 0.45
     var alignment: NSTextAlignment = .left
+    var singleLine = false
+    /// 擦亮（逐字跟随）那段文字的颜色；播放器白字，漫游浅底用黑字。
+    var highlightColor: Color = .white
 
     @EnvironmentObject private var player: PlayerService
     @ObservedObject private var windowVisibility = MainWindowVisibility.shared
@@ -1534,6 +1252,7 @@ struct LyricMainText: View {
                 size: size,
                 weight: weight,
                 alignment: alignment,
+                color: highlightColor,
                 playing: player.isPlaying && windowVisibility.isVisible
             )
             #else
@@ -1541,21 +1260,41 @@ struct LyricMainText: View {
                 minimumInterval: 1 / 30,
                 paused: !player.isPlaying || !windowVisibility.isVisible
             )) { _ in
-                LyricText(
-                    line: line, size: size, weight: weight, color: .white,
-                    alignment: alignment,
-                    alphas: Self.alphas(for: line, words: words, at: player.livePlaybackTime)
-                )
+                let alphas = Self.alphas(for: line, words: words, at: player.livePlaybackTime)
+                if singleLine {
+                    Text(Self.compactWipe(line.text, alphas: alphas, color: highlightColor))
+                        .font(.system(size: size, weight: weight))
+                        .lineLimit(1)
+                        .multilineTextAlignment(.center)
+                } else {
+                    LyricText(
+                        line: line, size: size, weight: weight, color: highlightColor,
+                        alignment: alignment, alphas: alphas
+                    )
+                }
             }
             #endif
         } else {
             LyricText(
                 line: line, size: size, weight: weight,
-                color: .white.opacity(isActive ? 1 : inactiveOpacity),
+                color: highlightColor.opacity(isActive ? 1 : inactiveOpacity),
                 alignment: alignment
             )
         }
     }
+
+    #if os(iOS)
+    // Text keeps the preview's one-line ellipsis even when the full lyric wraps.
+    private static func compactWipe(_ text: String, alphas: [Double], color: Color = .white) -> AttributedString {
+        var result = AttributedString()
+        for (index, character) in text.enumerated() {
+            var fragment = AttributedString(String(character))
+            fragment.foregroundColor = color.opacity(index < alphas.count ? alphas[index] : 1)
+            result.append(fragment)
+        }
+        return result
+    }
+    #endif
 
     /// One opacity per character of `line.text`: sung characters are bright,
     /// the current one fades in, unsung stay dim. A word's time is shared by
@@ -1592,6 +1331,8 @@ struct LyricMainText: View {
 
 #if os(iOS)
 private struct IOSImmersiveLyricsColumn: View {
+    var isVisible = true
+
     @EnvironmentObject private var player: PlayerService
     @ObservedObject private var lyricsCursor = PlayerService.shared.lyricsCursor
     @EnvironmentObject private var settings: SettingsManager
@@ -1704,7 +1445,7 @@ private struct IOSImmersiveLyricsColumn: View {
                     isActive: isActive,
                     size: isActive ? 26 : 21,
                     weight: isActive ? .bold : .semibold,
-                    verbatim: settings.verbatimLyrics
+                    verbatim: isVisible && settings.verbatimLyrics
                 )
 
                 if settings.showLyricsTranslation, let translation = line.translation {
@@ -1716,7 +1457,7 @@ private struct IOSImmersiveLyricsColumn: View {
             .multilineTextAlignment(.leading)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
-            .blur(radius: isActive || isUserScrolling ? 0 : 0.4)
+            .opacity(isActive || isUserScrolling ? 1 : 0.78)
             .scaleEffect(isActive ? 1.02 : 1.0, anchor: .leading)
         }
         .buttonStyle(.plain)
@@ -1771,6 +1512,9 @@ private struct CompactTrackHeader: View {
     /// artwork). The real image floats above this placeholder with hit-testing
     /// disabled, so taps land here.
     var onTapArtwork: (() -> Void)? = nil
+    /// 音效与音量的入口从底部按钮搬到了右上角菜单，由页面注入。
+    var onOpenSoundEffects: (() -> Void)? = nil
+    var onToggleVolume: (() -> Void)? = nil
 
     var body: some View {
         HStack(spacing: ImmersiveArtworkTransition.compactHeaderSpacing) {
@@ -1851,6 +1595,43 @@ private struct CompactTrackHeader: View {
                         Divider()
 
                         #if os(iOS)
+                        if let onOpenSoundEffects {
+                            Button {
+                                onOpenSoundEffects()
+                            } label: {
+                                Label("音效", systemImage: "waveform")
+                            }
+                        }
+
+                        Button {
+                            player.toggleShuffle()
+                        } label: {
+                            Label(
+                                player.shuffleEnabled ? "关闭随机播放" : "随机播放",
+                                systemImage: "shuffle"
+                            )
+                        }
+
+                        Button {
+                            player.repeatMode = player.repeatMode == .all ? .off : .all
+                        } label: {
+                            Label("列表循环", systemImage: "repeat")
+                        }
+
+                        Button {
+                            player.repeatMode = player.repeatMode == .one ? .off : .one
+                        } label: {
+                            Label("单曲循环", systemImage: "repeat.1")
+                        }
+
+                        if let onToggleVolume {
+                            Button {
+                                onToggleVolume()
+                            } label: {
+                                Label("音量", systemImage: "speaker.wave.2")
+                            }
+                        }
+
                         SleepTimerMenu(player: player)
 
                         Divider()
@@ -1871,7 +1652,12 @@ private struct CompactTrackHeader: View {
                             .frame(width: 44, height: 44)
                             .contentShape(Rectangle())
                     }
+                    #if os(iOS)
+                    // Let the native menu animate from a stable source frame.
+                    .buttonStyle(.plain)
+                    #else
                     .buttonStyle(.pressable)
+                    #endif
                     .accessibilityLabel("更多操作")
                     .accessibilityIdentifier("immersiveMoreMenu")
                 }
@@ -2009,9 +1795,12 @@ private struct CompactSecondaryControls: View {
     let showsQueue: Bool
     let onToggleLyrics: () -> Void
     let onToggleQueue: () -> Void
+    let onOpenComments: () -> Void
     let onOpenSoundEffects: () -> Void
 
     var body: some View {
+        // 底部只留三个：歌词 / 评论区 / 播放队列。
+        // 其余入口（音效、播放模式、音量、睡眠定时、AirPlay）在右上角「⋯」菜单里。
         HStack(spacing: 0) {
             secondaryButton(
                 icon: showsLyrics && !showsQueue ? "quote.bubble.fill" : "quote.bubble",
@@ -2019,28 +1808,10 @@ private struct CompactSecondaryControls: View {
                 isActive: showsLyrics && !showsQueue
             ) { onToggleLyrics() }
 
-            RoutePickerButton(diameter: 44, glyphSize: 17)
-                .frame(maxWidth: .infinity)
-
-            SoundEffectsButton(
-                action: onOpenSoundEffects,
-                diameter: 44,
-                glyphSize: 17
-            )
-            .frame(maxWidth: .infinity)
-
             secondaryButton(
-                icon: volumeIcon,
-                label: showsVolumeControl ? "关闭音量控制" : "显示音量控制",
-                isActive: showsVolumeControl
-            ) {
-                withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
-                    showsVolumeControl.toggle()
-                }
-            }
-            // The panel itself is drawn by the page (`volumeLayer`), above
-            // everything else, from this button's frame.
-            .anchorPreference(key: CompactVolumeButtonAnchorKey.self, value: .bounds) { $0 }
+                icon: "text.bubble",
+                label: "评论区"
+            ) { onOpenComments() }
 
             secondaryButton(
                 icon: "list.bullet",
@@ -2718,7 +2489,12 @@ private struct MinimalTrackInfoRow: View {
                 .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
         }
+        #if os(iOS)
+        // Let the native menu animate from a stable source frame.
+        .buttonStyle(.plain)
+        #else
         .buttonStyle(.pressable)
+        #endif
         .accessibilityLabel("更多操作")
         .accessibilityIdentifier("immersiveMoreMenu")
         .background {
@@ -2922,7 +2698,12 @@ struct NowPlayingScrubber: View {
 /// between the track meta and the transport controls on compact layouts.
 /// Tapping opens the full lyrics page.
 struct MiniLyricsView: View {
+    var isVisible = true
     let onOpen: () -> Void
+
+    #if os(iOS)
+    @EnvironmentObject private var settings: SettingsManager
+    #endif
 
     @EnvironmentObject private var player: PlayerService
     @ObservedObject private var lyricsCursor = PlayerService.shared.lyricsCursor
@@ -2959,15 +2740,32 @@ struct MiniLyricsView: View {
         }
     }
 
-    @ViewBuilder
     private func line(_ line: LyricLine?, emphasized: Bool) -> some View {
+        Group {
+            #if os(iOS)
+            if isVisible, emphasized, let line, !line.text.isEmpty,
+               settings.verbatimLyrics, line.words?.isEmpty == false {
+                LyricMainText(
+                    line: line, isActive: true, size: 17, weight: .bold,
+                    verbatim: settings.verbatimLyrics, alignment: .center, singleLine: true
+                )
+            } else {
+                plainLine(line, emphasized: emphasized)
+            }
+            #else
+            plainLine(line, emphasized: emphasized)
+            #endif
+        }
+        .padding(.horizontal, 28)
+        .id(line?.id)
+        .transition(.opacity.combined(with: .move(edge: .bottom)))
+    }
+
+    private func plainLine(_ line: LyricLine?, emphasized: Bool) -> some View {
         Text(line?.text.isEmpty == false ? line!.text : " ")
             .font(.system(size: emphasized ? 17 : 14, weight: emphasized ? .bold : .medium))
             .foregroundStyle(.white.opacity(emphasized ? 1 : 0.45))
             .lineLimit(1)
             .multilineTextAlignment(.center)
-            .padding(.horizontal, 28)
-            .id(line?.id)
-            .transition(.opacity.combined(with: .move(edge: .bottom)))
     }
 }

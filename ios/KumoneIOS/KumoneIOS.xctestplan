@@ -10,7 +10,7 @@
   ],
   "defaultOptions" : {
     "targetForVariableExpansion" : {
-      "containerPath" : "container:KumoneIOS.xcodeproj",
+      "containerPath" : "container:Antunes.xcodeproj",
       "identifier" : "8B41F6442DEDD0D5001A66F9",
       "name" : "KumoneIOS"
     }
@@ -25,7 +25,7 @@
     },
     {
       "target" : {
-        "containerPath" : "container:KumoneIOS.xcodeproj",
+        "containerPath" : "container:Antunes.xcodeproj",
         "identifier" : "8B41F65B2DEDD0D6001A66F9",
         "name" : "KumoneIOSUITests"
       }
