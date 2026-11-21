@@ -187,7 +187,15 @@ function lyricPlan(maxWidth,bar,font){
       if(cur)chunks.push(cur);
       if(!chunks.length)chunks.push('');
       const span=Math.max(1,(next?next.at:line.at+4000)-line.at);
-      chunks.forEach((chunk,i)=>rows.push({text:chunk,words:null,start:line.at+span*i/chunks.length}));
+      const per=span/Math.max(1,chunks.length);
+      chunks.forEach((chunk,i)=>{
+        const start=line.at+per*i;
+        // 没有逐字时间轴（普通 lrc）时按行时长均分合成逐字数据，和播放页
+        // lyricWords() 同一套思路：每个字拿 85% 的行时长依次推进，留一点停顿。
+        // 不合成的话这排渲染出来是纯文本、没有 .lyric-word，底栏就永远不擦亮。
+        const chars=[...chunk], usable=Math.max(1,per*0.85), step=usable/Math.max(1,chars.length);
+        rows.push({text:chunk,start,words:chars.map((ch,j)=>({text:ch,at:start+step*j,duration:step}))});
+      });
     }else{
       let cur=[],used=0;
       for(const w of words){const adv=lyricWidth(bar,font,w.text);if(cur.length&&used+adv>maxWidth){rows.push({words:cur,start:cur[0].at});cur=[];used=0;}cur.push(w);used+=adv;}
@@ -238,7 +246,13 @@ function lyricPaint(){
   const bar=$('#chrome .lyric-bar');if(!bar)return;
   const track=bar.querySelector('.lyric-track');if(!track)return;
   const key=`${lyricID}:${lyricCursor}`;
-  if(key!==lyricPaintKey){lyricPaintKey=key;const row=track.children[lyricCursor];lyricWordNodes=row?[...row.querySelectorAll('.lyric-word')]:[];}
+  if(key!==lyricPaintKey){
+    // 只有真的收到逐字节点才记账：刚重建 innerHTML 时行里可能还没有 span，
+    // 若此时把 key 记下来，就会一直复用空数组、再也不重试（逐字擦亮永久消失）。
+    const row=track.children[lyricCursor];
+    const nodes=row?[...row.querySelectorAll('.lyric-word')]:[];
+    if(nodes.length){lyricPaintKey=key;lyricWordNodes=nodes;}
+  }
   if(!lyricWordNodes.length)return;
   const pos=lyricPosition();
   for(const node of lyricWordNodes){
@@ -327,6 +341,9 @@ function renderChrome(){
   const bar=chrome.querySelector('.lyric-bar');
   if(bar&&!bar.dataset.wired){bar.dataset.wired='1';bar.addEventListener('click',()=>{if(!lyricsBar||!tabsExpanded)return;toggleNav(false);});}
   if(lyricsBar)updateLyricBar();
+  // 底栏歌词的逐字擦亮只在 lyricFrame 里跑；这个循环之前只有「手动切歌词」和「漫游」会启动，
+  // 冷启动时 lyricsBar 默认为真却没人拉起循环，于是 --progress 永远不写、擦亮整段失效。
+  if((lyricsBar||fmLyricHost())&&!lyricRAF)lyricRAF=requestAnimationFrame(lyricFrame);
   $('#page').classList.toggle('has-track',!!t);
   syncPlayerEdge();
 }

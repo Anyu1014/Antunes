@@ -348,7 +348,7 @@ public struct IOSMainWindow: View {
             }
             // 整屏底色：横屏左右两条安全区（刘海/圆角那两块）露的是窗口色，
             // 铺一层当前 tab 的底色并 ignore 安全区，才能和页面里一致。
-            .background(pageBackground(selectedTab).ignoresSafeArea())
+            .background(pageBackground(activeTab).ignoresSafeArea())
         }
         .animation(AppAnimation.standard, value: player.hasCurrentTrack)
         #if os(iOS)
@@ -562,6 +562,15 @@ public struct IOSMainWindow: View {
         return enabled.sorted { rank($0.tab) < rank($1.tab) }
     }
 
+    /// 当前实际要显示的板块。若 `selectedTab` 指向一个被设置关掉的板块
+    /// （`settings.showHome` / `showExplore` / `showSearch` 为 false），
+    /// 那个页面根本不在视图树里，`page()` 会把所有页面 opacity 置 0，
+    /// 整屏就只剩窗口底色 —— 表现就是偶发全白屏。这里统一夹到第一个可见板块。
+    private var activeTab: IOSTab {
+        if visibleTabItems.contains(where: { $0.tab == selectedTab }) { return selectedTab }
+        return visibleTabItems.first?.tab ?? .library
+    }
+
     private func ensureVisibleTab() {
         let visible = visibleTabItems
         if !visible.contains(where: { $0.tab == selectedTab }) {
@@ -657,7 +666,7 @@ public struct IOSMainWindow: View {
     /// 窗口本身的底色。SwiftUI 的 `.background` 铺不到的角落（圆角、
     /// 刘海两侧、横屏左右两条安全区）露的就是这一层，必须跟着当前 tab 走。
     private func applyWindowBackground() {
-        let color = UIColor(pageBackground(selectedTab))
+        let color = UIColor(pageBackground(activeTab))
         for scene in UIApplication.shared.connectedScenes {
             guard let windowScene = scene as? UIWindowScene else { continue }
             for window in windowScene.windows where !colorsMatch(window.backgroundColor, color) {
@@ -704,9 +713,9 @@ public struct IOSMainWindow: View {
             // 铺到安全区外：横屏左右那两条和界面内同色。
             .background(pageBackground(tab).ignoresSafeArea())
             .environment(\.pageBaseColor, pageBackground(tab))
-            .opacity(selectedTab == tab ? 1 : 0)
-            .allowsHitTesting(selectedTab == tab)
-            .zIndex(selectedTab == tab ? 1 : 0)
+            .opacity(activeTab == tab ? 1 : 0)
+            .allowsHitTesting(activeTab == tab)
+            .zIndex(activeTab == tab ? 1 : 0)
     }
 
     private func binding(for tab: IOSTab) -> Binding<[Destination]> {
