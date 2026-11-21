@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/icon.png" width="120" alt="Antunes" />
+<img src="docs/app-icon.png" width="120" alt="Antunes" />
 
 # Antunes
 
