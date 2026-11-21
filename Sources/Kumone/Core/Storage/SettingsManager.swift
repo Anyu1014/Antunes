@@ -132,6 +132,7 @@ final class SettingsManager: ObservableObject {
         static let qualitySplit = "settings.qualitySplitToLossless"
         static let appearance = "settings.appearance"
         static let showHome = "settings.showHome"
+        static let showFM = "settings.showFM"
         static let showLibrary = "settings.showLibrary"
         static let showExplore = "settings.showExplore"
         static let showSearch = "settings.showSearch"
@@ -233,6 +234,11 @@ final class SettingsManager: ObservableObject {
         didSet { UserDefaults.standard.set(showSearch, forKey: Keys.showSearch) }
     }
 
+    /// 漫游板块。和其他板块一样可以在设置里关掉；全关时底栏退回「我的」。
+    @Published var showFM: Bool {
+        didSet { UserDefaults.standard.set(showFM, forKey: Keys.showFM) }
+    }
+
     @Published var showLibrary: Bool {
         didSet { UserDefaults.standard.set(showLibrary, forKey: Keys.showLibrary) }
     }
@@ -242,9 +248,11 @@ final class SettingsManager: ObservableObject {
         didSet { UserDefaults.standard.set(showLikedInCreated, forKey: Keys.showLikedInCreated) }
     }
 
-    var homeSectionVisibility: [Bool] { [showHome, showExplore, showSearch, showLibrary] }
+    var homeSectionVisibility: [Bool] { [showHome, showExplore, showFM, showSearch, showLibrary] }
     var onlyLibrarySection: Bool { !homeSectionVisibility.contains(true) }
-    var anySectionEnabled: Bool { showHome || showExplore || showSearch || showLibrary }
+    /// 其它四个板块是否全关。「我的」只有在它们全关时才允许关闭。
+    var otherSectionsAllOff: Bool { !showHome && !showExplore && !showFM && !showSearch }
+    var anySectionEnabled: Bool { showHome || showExplore || showFM || showSearch || showLibrary }
 
     @Published var appearance: AppAppearance {
         didSet { UserDefaults.standard.set(appearance.rawValue, forKey: Keys.appearance) }
@@ -491,16 +499,25 @@ final class SettingsManager: ObservableObject {
         let normalizedAudioCacheSizeMB = Self.normalizedAudioCacheSizeMB(storedAudioCacheSizeMB)
         audioCacheSizeMB = normalizedAudioCacheSizeMB
         defaults.set(normalizedAudioCacheSizeMB, forKey: Keys.audioCacheSizeMB)
-        showHome = defaults.object(forKey: Keys.showHome) as? Bool ?? true
-        showLibrary = defaults.object(forKey: Keys.showLibrary) as? Bool ?? true
-        showExplore = defaults.object(forKey: Keys.showExplore) as? Bool ?? false
+        // 先读到局部变量再赋值：`init` 里所有存储属性初始化完成之前不能读 self。
+        let vHome = defaults.object(forKey: Keys.showHome) as? Bool ?? true
+        let vFM = defaults.object(forKey: Keys.showFM) as? Bool ?? true
+        let vLibrary = defaults.object(forKey: Keys.showLibrary) as? Bool ?? true
+        let vExplore = defaults.object(forKey: Keys.showExplore) as? Bool ?? false
+        showHome = vHome
+        showFM = vFM
+        showLibrary = vLibrary
+        showExplore = vExplore
         // 搜索板块默认关闭：老版本默认是开且从未写过这个键，迁移一次；
         // 用户此前手动开过的（键已存在）保持不动。
         if defaults.object(forKey: Keys.searchOffMigrated) == nil {
             defaults.set(false, forKey: Keys.showSearch)
             defaults.set(true, forKey: Keys.searchOffMigrated)
         }
-        showSearch = defaults.object(forKey: Keys.showSearch) as? Bool ?? false
+        let vSearch = defaults.object(forKey: Keys.showSearch) as? Bool ?? false
+        showSearch = vSearch
+        // 「我的」是兜底板块：只要还有别的板块开着，它就必须是开的（老数据里可能存成非法组合）。
+        if !vLibrary && (vHome || vExplore || vFM || vSearch) { showLibrary = true }
         if defaults.object(forKey: Keys.showLikedInCreatedMigrated) == nil {
             defaults.set(false, forKey: Keys.showLikedInCreated)
             defaults.set(true, forKey: Keys.showLikedInCreatedMigrated)

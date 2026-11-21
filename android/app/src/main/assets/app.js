@@ -134,7 +134,7 @@ function readPreferences(){
   if(Object.hasOwn(saved,'playerMode')){delete saved.playerMode;write('preferences',saved);}
   return saved;
 }
-let prefs={glassStyle:'native',tabLabels:false,lyricBar:true,lyricAlignMode:'center',showLibrary:true,startTab:'library',tabOrder:['showHome','showExplore','showSearch','showLibrary'],showHome:true,showExplore:false,showSearch:false,librarySearch:true,libraryOrder:['liked','daily','recents','collections','downloads','cloud'],libLiked:true,libDaily:true,libRecents:true,libCollections:true,libDownloads:true,libCloud:true,appearance:'system',quality:'exhigh',downloadQuality:'exhigh',translation:true,karaoke:true,annotation:'none',ambient:false,ambientIntensity:1,libCreatedLists:true,libCollectedLists:true,showLikedInCreated:false,artworkLink:true,eqEnabled:false,eqBands:Array(10).fill(0),losslessDefault:true,...readPreferences()};
+let prefs={glassStyle:'native',tabLabels:false,lyricBar:true,lyricAlignMode:'center',showLibrary:true,startTab:'library',tabOrder:['showHome','showExplore','showSearch','showLibrary'],showHome:true,showExplore:false,showSearch:false,showFM:true,librarySearch:true,libraryOrder:['liked','daily','recents','collections','downloads','cloud'],libLiked:true,libDaily:true,libRecents:true,libCollections:true,libDownloads:true,libCloud:true,appearance:'system',quality:'exhigh',downloadQuality:'exhigh',translation:true,karaoke:true,annotation:'none',ambient:false,ambientIntensity:1,libCreatedLists:true,libCollectedLists:true,showLikedInCreated:false,artworkLink:true,eqEnabled:false,eqBands:Array(10).fill(0),losslessDefault:true,...readPreferences()};
 let account=null,loggedIn=false,liked=new Set(),downloaded=new Set(),playlists=[],tab=(function(){const list=navigationTabs(prefs);const want=prefs.startTab;return (want&&want!=='auto'&&list.some(([k])=>k===want))?want:list[0][0];})(),route={kind:tab},history=[],renderID=0,overlayKind='',overlayHistory=[],overlayTimer=null;
 let player={queue:[],index:0,playing:false,loading:false,position:0,duration:0,mode:'list',error:''},lastTrackID=0,lyrics=[],translations=[],romaji=[],lyricID=0,activeLine=-1,showLyric=false,lyricsBar=prefs.lyricBar!==false,lyricRAF=0,lyricSync=0,tabsExpanded=false;
 const cache=new Map();let listTracks=[],detail=null,searchQuery='',searchType=1,category='全部',exploreItems=[],exploreOffset=0,exploreMore=false,queryTimer=null;
@@ -789,9 +789,20 @@ function librarySectionRows(){
   const rank=k=>{const i=order.indexOf(k);return i<0?order.length+1:i;};
   return `<div class="group" data-order="libraryOrder">${[...LIBRARY_ROWS].sort((a,b)=>rank(a[0])-rank(b[0])).map(([id,label,,flag])=>`<div class="list-row section-row" data-key="${flag}" data-order-key="${id}"><label class="section-label"><span>${e(label)}</span><input class="toggle" type="checkbox" aria-label="${e(label)}" ${prefs[flag]!==false?'checked':''} ${bindChange(ev=>{prefs[flag]=ev.target.checked;savePrefs();})}></label>${renameButton('libraryOrder',id,label)}</div>`).join('')}</div>`;
 }
+// 「我的」是兜底板块：其它四个（推荐/精选/漫游/搜索）都关掉之后才允许关它，
+// 否则底栏会出现「全部关闭 → 只剩兜底」的死循环，用户也没法再回到设置。
+const OTHER_SECTIONS=['showHome','showExplore','showFM','showSearch'];
+function othersAllOff(){return OTHER_SECTIONS.every(k=>prefs[k]===false);}
 function homeSectionToggle(label,key,orderKey){
-  return `<div class="list-row section-row" data-key="${key}" data-order-key="${orderKey||key}"><label class="section-label"><span>${e(label)}</span><input class="toggle" type="checkbox" aria-label="${e(label)}" ${prefs[key]?'checked':''} ${bindChange(async ev=>{
-    prefs[key]=ev.target.checked;savePrefs();
+  const locked=key==='showLibrary'&&!othersAllOff();
+  const note=locked?' title="其它四个板块全部关闭后才能关闭「我的」"':'';
+  return `<div class="list-row section-row${locked?' is-locked':''}" data-key="${key}" data-order-key="${orderKey||key}"><label class="section-label"${note}><span>${e(label)}</span><input class="toggle" type="checkbox" aria-label="${e(label)}" ${prefs[key]?'checked':''} ${locked?'disabled':''} ${bindChange(async ev=>{
+    if(key==='showLibrary'&&!ev.target.checked&&!othersAllOff()){ev.target.checked=true;toast('其它四个板块全部关闭后才能关闭「我的」');return;}
+    prefs[key]=ev.target.checked;
+    // 反向约束：只要还有别的板块开着，「我的」就必须是开的（否则会留下非法组合）。
+    if(prefs.showLibrary===false&&!othersAllOff())prefs.showLibrary=true;
+    savePrefs();
+    if(overlayKind==='settings')refreshSettings();
     if(!navigationTabs(prefs).some(([k])=>k===tab)){tab=navigationTabs(prefs)[0][0];history=[];route={kind:tab};await render();}
     else renderChrome();
   })}></label>${renameButton('tabOrder',orderKey||key,label)}</div>`;
@@ -811,7 +822,7 @@ function ambientIntensityRow(){
 function settingsHTML(){
   // 音质锁定极高：播放与下载都只用 exhigh，界面上不再提供选择。
   let html=`<div class="group-label">播放</div><div class="group"><div class="list-row static-row">${icon('music')}<span>音质</span><span class="row-value">极高</span></div>${listRow('音效','eq',openEQ)}${listRow('睡眠定时','clock',openSleep)}</div><p class="group-note">播放与下载均为极高。</p>`;
-  html+=`<div class="group-label">启动</div><div class="group">${selectRow('冷启动板块','startTab',[['auto','自动（第一个板块）'],['home','推荐'],['explore','精选'],['fm','漫游'],['library','我的'],['search','搜索']])}</div><div class="group-label">主页板块</div>${sectionRows()}<p class="group-note">只留一项时底栏直接显示该板块图标，两项及以上折叠为头像；全部关闭时保留“我的”。</p><div class="group-label">我的音乐板块</div>${librarySectionRows()}<p class="group-note">长按右侧三横线可上下拖动排序（顺序即“我的”页里从上到下）；关掉的项不再出现在“我的”页。</p><div class="group-label">主页歌单展示</div><div class="group">${toggleRow('创建的歌单','libCreatedLists',()=>{if(route.kind==='library')render();})}${toggleRow('收藏的歌单','libCollectedLists',()=>{if(route.kind==='library')render();})}${toggleRow('我喜欢的音乐显示在创建的歌单','showLikedInCreated',()=>{if(route.kind==='library')render();})}</div>`;
+  html+=`<div class="group-label">启动</div><div class="group">${selectRow('冷启动板块','startTab',[['auto','自动（第一个板块）'],['home','推荐'],['explore','精选'],['fm','漫游'],['library','我的'],['search','搜索']])}</div><div class="group-label">主页板块</div>${sectionRows()}<p class="group-note">只留一项时底栏直接显示该板块图标，两项及以上折叠为头像。「我的」只能在其它四个板块全部关闭后关闭；全部关闭时默认显示「我的」。</p><div class="group-label">我的音乐板块</div>${librarySectionRows()}<p class="group-note">长按右侧三横线可上下拖动排序（顺序即“我的”页里从上到下）；关掉的项不再出现在“我的”页。</p><div class="group-label">主页歌单展示</div><div class="group">${toggleRow('创建的歌单','libCreatedLists',()=>{if(route.kind==='library')render();})}${toggleRow('收藏的歌单','libCollectedLists',()=>{if(route.kind==='library')render();})}${toggleRow('我喜欢的音乐显示在创建的歌单','showLikedInCreated',()=>{if(route.kind==='library')render();})}</div>`;
   html+=`<div class="group-label">玻璃</div><div class="group">${selectRow('玻璃样式','glassStyle',[['native','原生磨砂'],['frost','高透磨砂'],['clear','清透玻璃'],['off','关闭']],applyTheme)}</div>`;
   html+=`<div class="group-label">外观</div><div class="group">${selectRow('主题','appearance',[['system','跟随系统'],['light','浅色'],['dark','深色']])}${toggleRow('底栏歌词','lyricBar',()=>{lyricsBar=prefs.lyricBar;if(!lyricsBar)tabsExpanded=false;renderChrome();})}${selectRow('歌词对齐','lyricAlignMode',[['left','居左'],['center','居中'],['right','居右']],()=>{chromeKey='';renderChrome();})}${toggleRow('底栏文字','tabLabels',applyTheme)}${toggleRow('我的页搜索按钮','librarySearch',()=>{if(route.kind==='library')render();})}${toggleRow('点击封面打开专辑','artworkLink')}${toggleRow('显示歌词翻译','translation')}${toggleRow('逐字歌词（卡拉OK）','karaoke',()=>{const t=player.queue[player.index];if(t)loadLyrics(t.id);})}${selectRow('日文歌词读音','annotation',[['none','无'],['romaji','罗马音']])}${toggleRow('主界面环境色','ambient',()=>{refreshSettings();refreshAmbient();})}${prefs.ambient?ambientIntensityRow():''}</div>`;
   html+=`<div class="group-label">存储</div><div class="group">${listRow('存储空间','download',openStorage)}${listRow('已下载','music',()=>{closeOverlay(true);navigate({kind:'downloads'});})}</div><div class="group-label">账号</div><div class="group">${loggedIn?`${listRow(account?.nickname||'已登录','user',()=>{})}${button('<span>退出登录</span>',()=>confirmAction('退出登录','将退出当前账号，本地下载与设置会保留。',async()=>{await native('logout');loggedIn=false;account=null;liked.clear();playlists=[];cache.clear();closeOverlay(true);render();}),'list-row danger')}`:listRow('登录','user',()=>openLogin())}</div>`;
@@ -1140,6 +1151,8 @@ document.addEventListener('change',ev=>{const el=ev.target.closest('[data-change
 window.addEventListener('android-back',()=>{if(route.kind===tab&&!history.length&&!overlayKind){toast('Antunes 已在前台，音乐可在后台继续播放');return;}back();});
 async function boot(){applyTheme();if(!prefs.ambientOffMigrated){prefs.ambient=false;prefs.ambientOffMigrated=true;write('preferences',prefs);}
   // 搜索板块改为默认关闭：只在从没迁移过时改一次，之后用户自己开的不会被覆盖。
+  // 「我的」只有在其它四个板块都关闭时才允许关闭；老数据里若出现非法组合，启动时纠正。
+  if(prefs.showLibrary===false&&!othersAllOff()){prefs.showLibrary=true;write('preferences',prefs);}
   if(!prefs.searchOffMigrated){prefs.showSearch=false;prefs.searchOffMigrated=true;write('preferences',prefs);}if(!prefs.losslessDefault){prefs.losslessDefault=true;if(prefs.quality==='exhigh')prefs.quality='lossless';savePrefs();}if(!prefs.downloadQuality)prefs.downloadQuality='lossless';try{native('quality',{value:prefs.quality}).catch(()=>{});const status=await native('status');loggedIn=status.loggedIn;const restored=await native('state');player={...player,...restored};player.fm=!!prefs.fm&&!!(player.queue&&player.queue[player.index]);const cur0=player.queue&&player.queue[player.index];if(cur0){loadLyrics(cur0.id);if(player.position>0)control('seek',{value:player.position});}await native('quality',{value:prefs.quality});await native('downloadQuality',{value:prefs.downloadQuality});await native('eq',{bands:prefs.eqBands,enabled:prefs.eqEnabled});try{(await native('downloads')).forEach(t=>downloaded.add(String(t.id)));}catch{}if(loggedIn)loadAccount().then(()=>{if(route.kind==='library')render();}).catch(errorToast);await render();}catch(err){$('#page').innerHTML=header('Antunes')+empty('启动失败',err.message,'wifi',button('重试',boot,'primary'));}}
 boot();
 

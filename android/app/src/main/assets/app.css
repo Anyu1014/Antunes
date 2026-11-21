@@ -188,6 +188,9 @@
 .avatar-button .avatar-button-icon svg{width:26px;height:26px;color:var(--ink)}
 /* 板块排序手柄 */
 .section-row{gap:8px}
+/* 「我的」锁住时（其它板块还开着）整行变淡，开关不可点。 */
+.section-row.is-locked .section-label span{opacity:.45}
+.section-row.is-locked input.toggle{opacity:.4}
 .section-label{flex:1;display:flex;align-items:center;justify-content:space-between;gap:12px;min-width:0}
 .static-row{pointer-events:none}.list-row>.row-value{margin-left:auto;flex:0 0 auto;text-align:right;color:var(--secondary);font-size:15px}
 .row-menu{width:34px;height:44px;flex:0 0 34px;display:grid;place-items:center;color:var(--secondary);background:none;border:0;padding:0}

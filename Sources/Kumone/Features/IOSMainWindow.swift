@@ -545,9 +545,10 @@ public struct IOSMainWindow: View {
         switch tab {
         case .home: return settings.showHome
         case .explore: return settings.showExplore
-        case .fm: return true
+        case .fm: return settings.showFM
         case .search: return settings.showSearch
-        case .library: return settings.showLibrary
+        // 「我的」是兜底板块：其它四个全关时它才允许消失（此时下面 visibleTabItems 会兜底回它）。
+        case .library: return settings.showLibrary || !settings.otherSectionsAllOff
         }
     }
 

@@ -117,7 +117,7 @@ struct SettingsView: View {
     }
 
     private var orderedTabs: [String] {
-        orderedKeys(["home", "explore", "library", "search"], stored: tabOrder)
+        orderedKeys(["home", "explore", "fm", "library", "search"], stored: tabOrder)
     }
 
     private var orderedLibraryRows: [String] {
@@ -152,6 +152,7 @@ struct SettingsView: View {
         switch key {
         case "home": return "推荐"
         case "explore": return "精选"
+        case "fm": return "漫游"
         case "library": return "我的"
         case "search": return "搜索"
         default: return key
@@ -162,6 +163,7 @@ struct SettingsView: View {
         switch key {
         case "home": return $settings.showHome
         case "explore": return $settings.showExplore
+        case "fm": return $settings.showFM
         case "library": return $settings.showLibrary
         case "search": return $settings.showSearch
         default: return .constant(true)
@@ -277,7 +279,12 @@ struct SettingsView: View {
     }
 
     private func sectionRow(_ key: String) -> some View {
-        reorderRow(key, title: tabTitle(key), isOn: binding(for: key), store: { tabStore })
+        // 「我的」是兜底板块：其它四个（推荐/精选/漫游/搜索）全部关闭后才允许关闭它，
+        // 否则底栏会无处可去，设置页本身也会跟着一起被关掉。
+        let locked = key == "library" && !settings.otherSectionsAllOff
+        return reorderRow(key, title: tabTitle(key), isOn: binding(for: key), store: { tabStore })
+            .disabled(locked)
+            .opacity(locked ? 0.45 : 1)
     }
 
     private func librarySectionRow(_ key: String) -> some View {
@@ -355,7 +362,7 @@ struct SettingsView: View {
             } header: {
                 Text("主页板块")
             } footer: {
-                Text("点右侧三个点可移到顶部、上移、下移、移到底部（顺序即底栏从左到右）；只留一项时底栏显示该项图标。")
+                Text("点右侧三个点可移到顶部、上移、下移、移到底部（顺序即底栏从左到右）；只留一项时底栏显示该项图标。「我的」只能在其它四个板块全部关闭后关闭，全部关闭时默认显示「我的」。")
             }
 
             Section {
