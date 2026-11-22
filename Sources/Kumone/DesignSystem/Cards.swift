@@ -17,7 +17,9 @@ struct CoverCard: View {
         Button(action: onOpen) {
             VStack(alignment: .leading, spacing: 8) {
                 ZStack(alignment: .bottomLeading) {
-                    CachedAsyncImage(url: coverURL)
+                    // 卡片本身只按显示尺寸取图，不要原图：网易原图动辄 1–2 MB 全尺寸解码，
+                    // 每次都把 ImageCache 的内存预算挤爆，导致「隔一会儿再进详情页又闪」。
+                    CachedAsyncImage(url: displayURL)
                         .frame(width: size, height: size)
                         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.standard, style: .continuous))
                         .overlay(
@@ -57,6 +59,12 @@ struct CoverCard: View {
         .task(id: coverURL) {
             ImageCache.shared.prefetch(coverURL.flatMap { ImageCache.variant(of: $0, size: 384) })
         }
+    }
+
+    /// 卡片显示用的尺寸档（detail hero 是 384，这里取 512 让卡片本身也够清晰，
+    /// 详情页再靠 `cachedPreview` 从 512 缩到 384，同样是同步命中）。
+    private var displayURL: URL? {
+        coverURL.flatMap { ImageCache.variant(of: $0, size: 512) } ?? coverURL
     }
 }
 

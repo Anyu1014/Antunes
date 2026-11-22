@@ -215,8 +215,9 @@ actor ImageCache {
     /// requested resolution right after, so this never becomes the final frame.
     /// 同一个封面换一档尺寸的 URL（detail hero 用 384）；用于提前预取。
     nonisolated static func variant(of url: URL, size: Int) -> URL? {
-        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              components.queryItems?.contains(where: { $0.name == "param" }) == true else { return nil }
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+        // 没有 `param` 的原始封面（列表里常见）同样要能换到目标尺寸，否则预取
+        // 静默失败、详情页那张大图永远是冷的。
         let otherItems = components.queryItems?.filter { $0.name != "param" } ?? []
         components.queryItems = otherItems + [URLQueryItem(name: "param", value: "\(size)y\(size)")]
         return components.url
@@ -236,12 +237,27 @@ actor ImageCache {
         for size in Self.knownSizes {
             components.queryItems = otherItems + [URLQueryItem(name: "param", value: "\(size)y\(size)")]
             guard let candidate = components.url, candidate != url else { continue }
-            if let image = cachedImage(for: candidate) ?? seeds.object(forKey: candidate.absoluteString as NSString),
-               let preview = Self.preview(image, for: url) {
+            let resident = cachedImage(for: candidate)
+                ?? seeds.object(forKey: candidate.absoluteString as NSString)
+                ?? diskSeed(for: candidate)
+            if let image = resident, let preview = Self.preview(image, for: url) {
                 return preview
             }
         }
         return nil
+    }
+
+    /// 磁盘里的**任意尺寸**版本，做有界解码后塞进 `seeds`。
+    ///
+    /// 详情页要 384、列表行只存过 80/128、或者只存过 640 —— 只要磁盘上有同一张
+    /// 封面的某个尺寸，就足够在首帧顶上去，避免占位图闪一下。系统的内存缓存
+    /// 每次内存压力都会清空，只靠内存命中必然「隔一会儿再进又闪」。
+    private nonisolated func diskSeed(for candidate: URL) -> PlatformImage? {
+        let key = Self.cacheKey(for: candidate)
+        guard let data = try? Data(contentsOf: directory.appendingPathComponent(key)),
+              let decoded = Self.decode(data, for: candidate, cap: 512) else { return nil }
+        seeds.setObject(decoded, forKey: candidate.absoluteString as NSString)
+        return decoded
     }
 
     /// Synchronous seed that also reads the *disk* cache.

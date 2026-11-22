@@ -19,6 +19,18 @@
   （213529ms）、无 `freeTrialInfo`；`hires` 实际回落到 `lossless`（同为 flac、862786bps）。
 - 要解除锁定必须先拿到「非极高文件为何音画不同步」的实证，并在真机逐档验收。
 
+## `.cache/`：项目私有、随时可删（2026-11-22 用户指令）
+
+所有「删掉不坏项目、也不拖慢构建」的产物**一律写项目根的 `.cache/`**，不要再丢 `/tmp`：
+
+- `shots/`：验证截图、裁剪后的证据图、录屏；
+- `scratch/`：一次性脚本（CDP 探测、正则替换草稿）、日志重定向产物；
+- `package-ios-XXXXXX/`：`Scripts/package.sh ios` 的 `Payload` 暂存，脚本结束即删。
+
+清理：`./Scripts/package.sh clean`（清空 `.cache/`、保留 `README.md`），或直接 `rm -rf .cache/*`。
+**不要**把源码、`build/latest` 的交付物、以及会拖慢构建的中间物（`ios/DerivedData`、`.build`、
+`android/build`、`android/.gradle`）放进 `.cache/`。
+
 ## 回归处理
 
 用户报「又坏了 / 不对了」时，先回退到最近一次用户验收正确的状态并装机验证，

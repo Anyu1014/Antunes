@@ -12,7 +12,8 @@ HISTORY="$ROOT/build/history"
 
 if [ "${1:-all}" = clean ]; then
   mkdir -p "$ROOT/.cache"
-  find "$ROOT/.cache" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+  # 保留 README.md：它是「这里放什么、可以整目录删」的说明，本身也是零成本文件。
+  find "$ROOT/.cache" -mindepth 1 -maxdepth 1 ! -name README.md -exec rm -rf {} +
   exit 0
 fi
 

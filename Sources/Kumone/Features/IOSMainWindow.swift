@@ -84,6 +84,11 @@ public struct IOSMainWindow: View {
             }
             .onChange(of: scenePhase) { phase in
                 guard phase == .active else { return }
+                // 从后台回来时窗口可能重建/换了 backing store，底色要重新按当前
+                // 板块写一遍，否则会有一帧是窗口默认白。
+                #if os(iOS)
+                applyWindowBackground()
+                #endif
                 if let last = lastForegroundRefresh, Date().timeIntervalSince(last) < 300 { return }
                 lastForegroundRefresh = Date()
                 Task {
@@ -308,13 +313,19 @@ public struct IOSMainWindow: View {
 
             ZStack(alignment: .bottom) {
                 ZStack {
+                    // 最底层永远是当前板块的底色：即使某一帧所有页面都被 opacity 置 0
+                    // （见 `renderedTabs` 的注释），露出的也是页面同色而不是窗口白。
+                    Color.clear
+                        .background(pageBackground(activeTab))
                     if settings.showHome {
                         page(.home) { tabStack(.home) { HomeView() } }
                     }
                     if settings.showExplore {
                         page(.explore) { tabStack(.explore) { ExploreView() } }
                     }
-                    page(.fm) { tabStack(.fm) { FMView() } }
+                    if settings.showFM {
+                        page(.fm) { tabStack(.fm) { FMView() } }
+                    }
                     if settings.showSearch {
                         page(.search) { tabStack(.search) { SearchView(query: "") } }
                     }
@@ -568,8 +579,24 @@ public struct IOSMainWindow: View {
     /// 那个页面根本不在视图树里，`page()` 会把所有页面 opacity 置 0，
     /// 整屏就只剩窗口底色 —— 表现就是偶发全白屏。这里统一夹到第一个可见板块。
     private var activeTab: IOSTab {
-        if visibleTabItems.contains(where: { $0.tab == selectedTab }) { return selectedTab }
-        return visibleTabItems.first?.tab ?? .library
+        if renderedTabs.contains(selectedTab) { return selectedTab }
+        return renderedTabs.first ?? .library
+    }
+
+    /// 视图树里**真正构建出来**的板块，顺序与 `customTabInterface` 的 ZStack 一致。
+    ///
+    /// `page()` 靠 `activeTab == tab` 决定谁 opacity 1，所以 `activeTab` 只能在这
+    /// 个集合里挑：一旦它指向一个没被构建的页面（例如设置里刚把该板块关掉、
+    /// 而 `selectedTab` 还停在上面），五个页面会同时 opacity 0，整屏只剩窗口
+    /// 底色 —— 这就是「偶发全白屏」。`page(.library)` 无条件构建，是最后的兜底。
+    private var renderedTabs: [IOSTab] {
+        var tabs: [IOSTab] = []
+        if settings.showHome { tabs.append(.home) }
+        if settings.showExplore { tabs.append(.explore) }
+        if settings.showFM { tabs.append(.fm) }
+        if settings.showSearch { tabs.append(.search) }
+        tabs.append(.library)
+        return tabs
     }
 
     private func ensureVisibleTab() {
