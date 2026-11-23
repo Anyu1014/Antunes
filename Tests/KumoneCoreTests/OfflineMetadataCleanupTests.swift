@@ -4,6 +4,22 @@ import Testing
 
 @Suite("Offline metadata cleanup")
 struct OfflineMetadataCleanupTests {
+    @Test func lyricCleanupPreservesDownloadsAndOtherAccounts() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let metadata = OfflineMetadataStore(directory: root)
+        let lyrics = try JSONDecoder().decode(LyricResponse.self, from: Data(#"{"lrc":{"lyric":"[00:00.00]Fixture"}}"#.utf8))
+        for scope in ["a", "b"] {
+            for id in [1, 2, 3] { try await metadata.save(lyrics: lyrics, trackID: id, scope: scope) }
+        }
+        await metadata.removeLyrics(trackIDs: [1], scope: "a")
+        try await metadata.clearLyrics(scope: "a", excluding: [2])
+        #expect(await metadata.lyrics(trackID: 1, scope: "a") == nil)
+        #expect(await metadata.lyrics(trackID: 2, scope: "a") != nil)
+        #expect(await metadata.lyrics(trackID: 3, scope: "a") == nil)
+        for id in [1, 2, 3] { #expect(await metadata.lyrics(trackID: id, scope: "b") != nil) }
+    }
+
     @Test func removesOrphanMetadataButKeepsAudioCurrentAndPendingTracks() async throws {
         let fixture = try OfflineAudioFixture(), audio = fixture.store()
         let root = audio.directory.appendingPathComponent("metadata")

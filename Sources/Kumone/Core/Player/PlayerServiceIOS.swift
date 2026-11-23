@@ -149,6 +149,7 @@ final class PlayerService: ObservableObject {
 
     @Published private(set) var isFMMode = false
     @Published private(set) var fmUpcoming: [Track] = []
+    private var fmRequestID: UUID?
     /// Where playback was most recently started from, newest first —
     /// surfaced as "Recently Played" in the Dock menu.
     @Published private(set) var recentContexts: [PlayContext] = []
@@ -186,6 +187,15 @@ final class PlayerService: ObservableObject {
     private var statusObservation: NSKeyValueObservation?
     private var itemStatusObservation: NSKeyValueObservation?
     private var resolveGeneration = 0
+    private var playbackIntent = UUID()
+
+    @discardableResult
+    func beginPlaybackIntent() -> UUID {
+        playbackIntent = UUID()
+        return playbackIntent
+    }
+
+    func isCurrentPlaybackIntent(_ intent: UUID) -> Bool { playbackIntent == intent }
     private var consecutiveFailures = 0
     /// Why the last playback URL request failed, when it failed in transit
     /// or the service refused it, rather than answering with no URL. Named
@@ -285,18 +295,10 @@ final class PlayerService: ObservableObject {
                 let seconds = time.seconds
                 guard seconds.isFinite else { return }
 
-                // Lyrics need this cadence to stay in sync; the cursor itself
-                // only publishes when the line actually changes.
+                // 进度条、歌词、系统锁屏三处都吃同一份采样，且每个 tick 都发布。
+                self.progress = seconds
                 self.updateLyricsCursor(at: seconds)
-
-                // The scrubber does not. Publishing the position every tick
-                // re-renders it — and SwiftUI rebuilds the display list for the
-                // whole tree each time — to move the thumb a fraction of a
-                // pixel. Half a second is still smoother than the eye needs.
-                if abs(seconds - self.progress) > 0.45 {
-                    self.progress = seconds
-                    NowPlayingManager.shared.updateElapsed(seconds, rate: self.isPlaying ? 1 : 0)
-                }
+                NowPlayingManager.shared.updateElapsed(seconds, rate: self.isPlaying ? 1 : 0)
                 if self.isPlaying, self.lastPlaybackCheckpoint.duration(to: .now) >= .seconds(20) {
                     self.persistState()
                 }
@@ -310,6 +312,8 @@ final class PlayerService: ObservableObject {
         }
 
         NowPlayingManager.shared.attach(to: self, avPlayer: engine)
+
+
         offlineActivatedScope = AccountStore.shared.offlineScope
         networkObservation = DownloadManager.shared.$network.removeDuplicates().sink { [weak self] network in
             self?.networkState = network
@@ -364,9 +368,12 @@ final class PlayerService: ObservableObject {
     ///   playing an ad-hoc selection (search results, a single track) omit it.
     func play(tracks: [Track], source: PlaySource, startAt track: Track? = nil,
               context: PlayContext? = nil) {
+        beginPlaybackIntent()
         guard !tracks.isEmpty else { return }
         if let context { recordRecent(context) }
         isFMMode = false
+        fmRequestID = nil
+        if !fmUpcoming.isEmpty { fmUpcoming = [] }
         queue = tracks
         self.source = source
         playNextList.removeAll()
@@ -381,6 +388,7 @@ final class PlayerService: ObservableObject {
     }
 
     func playTrack(_ track: Track) {
+        beginPlaybackIntent()
         if let idx = activeQueue.firstIndex(where: { $0.id == track.id }) {
             currentIndex = idx
             startPlaying(track)
@@ -400,6 +408,7 @@ final class PlayerService: ObservableObject {
     }
 
     func togglePlayPause() {
+        beginPlaybackIntent()
         guard let track = currentTrack else { return }
         if isPlaying {
             pause()
@@ -417,6 +426,8 @@ final class PlayerService: ObservableObject {
     }
 
     func pause() {
+        beginPlaybackIntent()
+        fmRequestID = nil
         engine.pause()
         isPlaying = false
         AudioSpectrum.shared.reset()
@@ -425,10 +436,12 @@ final class PlayerService: ObservableObject {
     }
 
     func next() {
+        beginPlaybackIntent()
         advanceToNext(userInitiated: true)
     }
 
     func previous() {
+        beginPlaybackIntent()
         if isFMMode { return }
         if progress > 4 || activeQueue.isEmpty {
             seek(to: 0)
@@ -447,9 +460,10 @@ final class PlayerService: ObservableObject {
     }
 
     /// Recomputes the current lyric line, publishing only on a change.
-    /// The lead makes a line light up just before it is sung.
+    /// 与进度条、锁屏共用同一个采样时刻，不再带提前量。
     private func updateLyricsCursor(at seconds: TimeInterval) {
-        let index = lyrics?.activeIndex(at: seconds + 0.2)
+        // 不再加 0.2 秒提前量：游标与进度条取同一个采样时刻，歌词与声音同刻换行。
+        let index = lyrics?.activeIndex(at: seconds)
         if index != lyricsCursor.activeIndex {
             lyricsCursor.activeIndex = index
         }
@@ -579,7 +593,8 @@ final class PlayerService: ObservableObject {
     // MARK: - Personal FM
 
     func startFM() {
-        guard !isFMMode || !isPlaying else { return }
+        beginPlaybackIntent()
+        guard fmRequestID == nil, !isFMMode || !isPlaying else { return }
         recordRecent(.fm)
         isFMMode = true
         shuffleEnabled = false
@@ -593,26 +608,44 @@ final class PlayerService: ObservableObject {
     }
 
     func fmNext() {
+        beginPlaybackIntent()
         guard isFMMode else { return }
         Task { await fmAdvance() }
     }
 
     func fmTrash() {
+        beginPlaybackIntent()
         guard isFMMode, let track = currentTrack else { return }
+        let scope = offlineAccountScope
         Task {
             await fmAdvance()
+            guard scope == offlineAccountScope else { return }
             try? await MusicAPI.fmTrash(id: track.id)
         }
     }
 
     private func fmAdvance() async {
+        guard isFMMode, fmRequestID == nil else { return }
         if usesOfflineQueue {
             advanceOffline()
             return
         }
+        let request = UUID()
+        fmRequestID = request
+        let scope = offlineAccountScope
+        let generation = resolveGeneration
+        defer { if fmRequestID == request { fmRequestID = nil } }
+
+        func isCurrent(_ generation: Int) -> Bool {
+            fmRequestID == request && isFMMode && scope == offlineAccountScope
+                && generation == resolveGeneration && !Task.isCancelled
+        }
         if fmUpcoming.isEmpty {
             for attempt in 0..<3 {
-                if let tracks = try? await MusicAPI.personalFM(), !tracks.isEmpty {
+                guard isCurrent(generation) else { return }
+                let tracks = try? await MusicAPI.personalFM()
+                guard isCurrent(generation) else { return }
+                if let tracks, !tracks.isEmpty {
                     fmUpcoming = tracks
                     break
                 }
@@ -623,14 +656,17 @@ final class PlayerService: ObservableObject {
                 try? await Task.sleep(for: .seconds(1))
             }
         }
-        guard !fmUpcoming.isEmpty else { return }
+        guard isCurrent(generation), !fmUpcoming.isEmpty else { return }
         let track = fmUpcoming.removeFirst()
         pendingAutoAdvance = true
         startPlaying(track)
-        if fmUpcoming.count < 1 {
-            if let more = try? await MusicAPI.personalFM() {
-                fmUpcoming.append(contentsOf: more)
-            }
+        fmRequestID = nil
+        if fmUpcoming.isEmpty {
+            let playingGeneration = resolveGeneration
+            let more = try? await MusicAPI.personalFM()
+            guard fmRequestID == nil, isFMMode, scope == offlineAccountScope, !Task.isCancelled,
+                  playingGeneration == resolveGeneration, fmUpcoming.isEmpty, let more else { return }
+            fmUpcoming.append(contentsOf: more)
         }
     }
 
@@ -754,7 +790,7 @@ final class PlayerService: ObservableObject {
                                 localLease: OfflinePlaybackLease? = nil,
                                 skipsLocalCopies: Bool = false,
                                 resumeAt: TimeInterval = 0) async {
-        let quality = AudioQuality.exhigh.rawValue  // 音质锁定极高，见 src/AGENTS.md
+        let quality = AudioQuality.exhigh.rawValue
         let allowsUnblock = SettingsManager.shared.canResolveUnblockedTracks
         let cacheEnabled = SettingsManager.shared.enableAudioCache && !skipsLocalCopies
         lastResolveFailure = nil
@@ -815,9 +851,6 @@ final class PlayerService: ObservableObject {
         var data: SongURLData?
         do {
             data = try await MusicAPI.songURLRetrying(ids: [track.id], level: quality).first
-            if data?.url == nil, quality != AudioQuality.standard.rawValue {
-                data = try await MusicAPI.songURLRetrying(ids: [track.id], level: AudioQuality.standard.rawValue).first
-            }
         } catch {
             guard generation == resolveGeneration else { return }
             if !(error is CancellationError) {
@@ -1127,6 +1160,11 @@ final class PlayerService: ObservableObject {
             engine.play()
             scrobbleStartIfNeeded()
         }
+        previousResourceLoader?.cancel()
+        if let previousCacheLease {
+            releaseAudioCacheLease(previousCacheLease)
+        }
+        if let previousOfflineLease { Task { try? await OfflineStore.shared.release(previousOfflineLease) } }
 
         if let durationMS, durationMS > 0 {
             duration = TimeInterval(durationMS) / 1000
@@ -1499,6 +1537,8 @@ final class PlayerService: ObservableObject {
     func activateAccount(scope: String?) {
         guard offlineActivatedScope != scope else { return }
         offlineActivatedScope = scope
+        fmRequestID = nil
+        if !fmUpcoming.isEmpty { fmUpcoming = [] }
         offlineScan?.cancel()
         offlineScan = nil
         offlineScanID = UUID()
@@ -1557,6 +1597,7 @@ final class PlayerService: ObservableObject {
 
     /// Reloads a place from the recents list and starts playing it again.
     func play(context: PlayContext) {
+        beginPlaybackIntent()
         // Personal FM is a stream, not a fixed list — restart it in place.
         guard context.kind != .fm else { return startFM() }
         Task {
@@ -1638,6 +1679,7 @@ final class PlayerService: ObservableObject {
         source = session.source
         if let mode = RepeatMode(rawValue: session.repeatMode) { repeatMode = mode }
         isFMMode = session.isFM
+        fmRequestID = nil
         fmUpcoming = []
         progress = session.progress
         duration = session.currentTrack.duration

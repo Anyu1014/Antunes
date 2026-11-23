@@ -294,11 +294,8 @@ struct SettingsView: View {
     private var settingsForm: some View {
         Form {
             Section("播放") {
-                // 音质固定为极高：播放与下载都只用这一个档位，界面上不再提供选择。
                 LabeledContent("音质", value: AudioQuality.exhigh.displayName)
-                Text("播放与下载均为极高")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("settingsAudioQuality")
                 #if os(iOS)
                 NavigationLink(value: SettingsPage.soundEffects) {
                     HStack {

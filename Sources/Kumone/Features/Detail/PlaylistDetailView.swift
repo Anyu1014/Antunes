@@ -12,6 +12,7 @@ struct PlaylistDetailView: View {
     private let player = PlayerService.shared
     @EnvironmentObject private var account: AccountStore
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     /// 吸顶条是否已经顶到导航栏下缘。
     @State private var headerStuck = false
     @State private var showFullDescription = false
@@ -32,11 +33,16 @@ struct PlaylistDetailView: View {
         self.playlistID = playlistID
         self.isLikedList = isLikedList
         self.recommendationContext = recommendationContext
+        #if os(iOS)
+        _model = StateObject(wrappedValue: PlaylistContent(playlistID: playlistID, preparesArtwork: true))
+        #else
         _model = StateObject(wrappedValue: PlaylistContent(playlistID: playlistID))
+        #endif
     }
 
     private var isOwnPlaylist: Bool {
-        model.detail?.creator?.userId == account.profile?.userId
+        guard let accountID = account.authenticatedAccountID else { return false }
+        return model.detail?.creator?.userId == accountID
     }
 
     private var isCompact: Bool {
@@ -171,8 +177,15 @@ struct PlaylistDetailView: View {
     }
 
     private func loadPlaylist() async {
+        #if os(iOS)
+        let artworkSize: Int? = LayoutSizeClass.isCompact(horizontal: horizontalSizeClass,
+            vertical: verticalSizeClass, fallback: UIDevice.current.userInterfaceIdiom == .phone) ? 160 : 96
+        #else
+        let artworkSize: Int? = nil
+        #endif
         await model.load(allowNetwork: !downloads.network.isKnown || downloads.network.connected,
-                         summary: account.userPlaylists.first { $0.id == playlistID })
+                         summary: account.userPlaylists.first { $0.id == playlistID },
+                         artworkSize: artworkSize)
     }
 
     @ViewBuilder
@@ -370,8 +383,7 @@ struct PlaylistDetailView: View {
                 .frame(maxWidth: heroMaxWidth, alignment: .leading)
                 .padding(.vertical, 8)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                // 吸顶条自己不再铺底：横屏那层渐进模糊由页面顶部的
-                // `ProgressiveTopBlur` 统一提供，这里只留按钮本身。
+                // 吸顶条自己不再铺底：横屏的底由系统导航栏提供，这里只留按钮本身。
         }
     }
 
@@ -535,8 +547,12 @@ struct PlaylistDetailView: View {
     private func compactHero(_ detail: PlaylistDetail) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 14) {
-                CachedAsyncImage(url: detail.coverImgUrl?.resizedImageURL(384), animated: false)
-                    .frame(width: 120, height: 120)
+                CachedAsyncImage(url: detail.coverImgUrl?.resizedImageURL(384), animated: false) {
+                    // 占位不要画音符图标：图标出现再消失才叫「闪」，纯色块过渡看不出来。
+                    RoundedRectangle(cornerRadius: Theme.Radius.standard, style: .continuous)
+                        .fill(Color.primary.opacity(0.06))
+                }
+                .frame(width: 120, height: 120)
                     .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.standard, style: .continuous))
                     .shadow(color: .black.opacity(0.2), radius: 10, y: 4)
 

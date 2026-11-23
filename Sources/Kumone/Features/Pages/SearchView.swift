@@ -20,10 +20,12 @@ final class SearchViewModel: ObservableObject {
     @Published var playlists: [PlaylistSummary] = []
     @Published var loadedTabs: Set<Tab> = []
     @Published private var loadingTabs: Set<Tab> = []
+    @Published private(set) var failedTabs: Set<Tab> = []
     /// Bumped on every query change so responses to an older query are dropped.
     private var generation = 0
+    private var requests: [Tab: UUID] = [:]
 
-    var isLoading: Bool { !loadingTabs.isEmpty }
+    var isLoading: Bool { loadingTabs.contains(tab) }
 
     init(query: String) {
         self.query = query
@@ -33,8 +35,10 @@ final class SearchViewModel: ObservableObject {
         guard newQuery != query else { return }
         query = newQuery
         generation &+= 1
+        requests.removeAll()
         loadedTabs.removeAll()
         loadingTabs.removeAll()
+        failedTabs.removeAll()
         songs = []
         artists = []
         albums = []
@@ -44,12 +48,20 @@ final class SearchViewModel: ObservableObject {
     func load(tab: Tab) async {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        guard !loadedTabs.contains(tab) else { return }
+        guard !loadedTabs.contains(tab), !Task.isCancelled else { return }
+        failedTabs.remove(tab)
         let requestGeneration = generation
-        loadedTabs.insert(tab)
+        let request = UUID()
+        requests[tab] = request
         loadingTabs.insert(tab)
+        func isCurrent() -> Bool {
+            generation == requestGeneration && requests[tab] == request && !Task.isCancelled
+        }
         defer {
-            if generation == requestGeneration { loadingTabs.remove(tab) }
+            if requests[tab] == request {
+                requests[tab] = nil
+                loadingTabs.remove(tab)
+            }
         }
 
         // A failed request leaves the tab unloaded so submitting again retries
@@ -62,31 +74,37 @@ final class SearchViewModel: ObservableObject {
             async let playlistsTask = try? MusicAPI.search(trimmed, type: .playlists, limit: 10)
             let (songResult, artistResult, albumResult, playlistResult) =
                 await (songsTask, artistsTask, albumsTask, playlistsTask)
-            guard generation == requestGeneration else { return }
-            songs = songResult?.songs ?? []
-            artists = artistResult?.artists ?? []
-            albums = albumResult?.albums ?? []
-            playlists = playlistResult?.playlists ?? []
+            guard isCurrent() else { return }
+            if let songResult { songs = songResult.songs ?? [] }
+            if let artistResult { artists = artistResult.artists ?? [] }
+            if let albumResult { albums = albumResult.albums ?? [] }
+            if let playlistResult { playlists = playlistResult.playlists ?? [] }
             if songResult == nil || artistResult == nil || albumResult == nil || playlistResult == nil {
-                loadedTabs.remove(tab)
+                markFailed(tab)
             }
         case .songs:
             let result = try? await MusicAPI.search(trimmed, type: .songs, limit: 100)
-            guard generation == requestGeneration else { return }
-            if let result { songs = result.songs ?? songs } else { loadedTabs.remove(tab) }
+            guard isCurrent() else { return }
+            if let result { songs = result.songs ?? songs } else { markFailed(tab) }
         case .artists:
             let result = try? await MusicAPI.search(trimmed, type: .artists, limit: 50)
-            guard generation == requestGeneration else { return }
-            if let result { artists = result.artists ?? artists } else { loadedTabs.remove(tab) }
+            guard isCurrent() else { return }
+            if let result { artists = result.artists ?? artists } else { markFailed(tab) }
         case .albums:
             let result = try? await MusicAPI.search(trimmed, type: .albums, limit: 50)
-            guard generation == requestGeneration else { return }
-            if let result { albums = result.albums ?? albums } else { loadedTabs.remove(tab) }
+            guard isCurrent() else { return }
+            if let result { albums = result.albums ?? albums } else { markFailed(tab) }
         case .playlists:
             let result = try? await MusicAPI.search(trimmed, type: .playlists, limit: 50)
-            guard generation == requestGeneration else { return }
-            if let result { playlists = result.playlists ?? playlists } else { loadedTabs.remove(tab) }
+            guard isCurrent() else { return }
+            if let result { playlists = result.playlists ?? playlists } else { markFailed(tab) }
         }
+        if !failedTabs.contains(tab) { loadedTabs.insert(tab) }
+    }
+
+    private func markFailed(_ tab: Tab) {
+        loadedTabs.remove(tab)
+        if !Task.isCancelled { failedTabs.insert(tab) }
     }
 }
 
@@ -155,9 +173,7 @@ struct SearchView: View {
             TrackListScrollView(trackIDs: model.songs.map(\.id)) {
                 VStack(spacing: 20) {
                     tabPicker
-                    if model.isLoading && currentEmpty {
-                        ProgressView().frame(maxWidth: .infinity, minHeight: 300)
-                    }
+                    resultStatus
                 }
             } rows: { layout in
                 TrackListView(tracks: model.songs, layout: layout)
@@ -179,12 +195,8 @@ struct SearchView: View {
                 if !searchText.trimmingCharacters(in: .whitespaces).isEmpty {
                     tabPicker
 
-                    if model.isLoading && currentEmpty {
-                        ProgressView()
-                            .frame(maxWidth: .infinity, minHeight: 300)
-                    } else {
-                        tabContent
-                    }
+                    if !currentEmpty { tabContent }
+                    resultStatus
                 } else {
                     emptySearchPrompt
                 }
@@ -225,10 +237,27 @@ struct SearchView: View {
     private var currentEmpty: Bool {
         switch model.tab {
         case .all: return model.songs.isEmpty && model.artists.isEmpty
+            && model.albums.isEmpty && model.playlists.isEmpty
         case .songs: return model.songs.isEmpty
         case .artists: return model.artists.isEmpty
         case .albums: return model.albums.isEmpty
         case .playlists: return model.playlists.isEmpty
+        }
+    }
+
+    @ViewBuilder
+    private var resultStatus: some View {
+        if model.failedTabs.contains(model.tab) {
+            ErrorStateView(message: String(localized: "搜索失败，请重试")) {
+                Task { await model.load(tab: model.tab) }
+            }
+        } else if currentEmpty {
+            if model.isLoading {
+                ProgressView().frame(maxWidth: .infinity, minHeight: 300)
+            } else if model.loadedTabs.contains(model.tab) {
+                EmptyStateView(icon: "magnifyingglass", title: "没有找到相关结果")
+                    .frame(minHeight: 300)
+            }
         }
     }
 
@@ -260,10 +289,6 @@ struct SearchView: View {
                 Shelf(title: "歌单", seeAll: { model.tab = .playlists }) {
                     playlistCards(model.playlists.prefix(8))
                 }
-            }
-            if currentEmpty, !model.isLoading {
-                EmptyStateView(icon: "magnifyingglass", title: "没有找到相关结果")
-                    .frame(minHeight: 300)
             }
         case .songs:
             TrackListView(tracks: model.songs)

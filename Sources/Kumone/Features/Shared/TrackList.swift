@@ -30,6 +30,7 @@ struct TrackRow: View {
     var onRemoved: (() -> Void)?
     var onRecommendationReplaced: ((Track) -> Void)?
     let onPlay: () -> Void
+    private let keepArtworkWhileRefreshing: Bool
 
     @EnvironmentObject private var player: PlayerService
     @EnvironmentObject private var account: AccountStore
@@ -51,7 +52,8 @@ struct TrackRow: View {
 
     init(track: Track, index: Int, style: TrackRowStyle = .full, playability: TrackPlayability = .playable,
          trailingText: String? = nil, removableFromPlaylistID: Int? = nil, onRemoved: (() -> Void)? = nil,
-         onRecommendationReplaced: ((Track) -> Void)? = nil, onPlay: @escaping () -> Void) {
+         onRecommendationReplaced: ((Track) -> Void)? = nil, keepArtworkWhileRefreshing: Bool = false,
+         onPlay: @escaping () -> Void) {
         self.track = track
         self.index = index
         self.style = style
@@ -61,6 +63,7 @@ struct TrackRow: View {
         self.onRemoved = onRemoved
         self.onRecommendationReplaced = onRecommendationReplaced
         self.onPlay = onPlay
+        self.keepArtworkWhileRefreshing = keepArtworkWhileRefreshing
         _downloadState = ObservedObject(wrappedValue: DownloadManager.shared.trackState(for: track.id))
     }
 
@@ -229,7 +232,7 @@ struct TrackRow: View {
     @ViewBuilder
     private var artworkImage: some View {
         if isCompact {
-            CachedAsyncImage(url: track.album.picUrl?.resizedImageURL(160), animated: false)
+            trackThumbnail(size: 160)
                 .frame(width: compactArtworkSize, height: compactArtworkSize)
                 .overlay(alignment: .bottomTrailing) {
                     if hidesLeadingIndex, isCurrent {
@@ -245,10 +248,24 @@ struct TrackRow: View {
                 .compositingGroup()
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
         } else {
-            CachedAsyncImage(url: track.album.picUrl?.resizedImageURL(96), animated: false)
+            trackThumbnail(size: 96)
                 .frame(width: 42, height: 42)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.small, style: .continuous))
         }
+    }
+
+    @ViewBuilder
+    private func trackThumbnail(size: Int) -> some View {
+        let url = track.album.picUrl?.resizedImageURL(size)
+        #if os(iOS)
+        let owner = keepArtworkWhileRefreshing && track.album.id > 0
+            ? CachedImageState.Owner(trackID: track.id, albumID: track.album.id) : nil
+        CachedAsyncImage(url: url, animated: false, owner: owner) {
+            Rectangle().fill(.quaternary.opacity(0.5))
+        }
+        #else
+        CachedAsyncImage(url: url, animated: false)
+        #endif
     }
 
     @ViewBuilder
@@ -654,6 +671,11 @@ struct TrackListView: View {
         }
     }
 
+    private var isPlaylistSource: Bool {
+        if case .playlist = source { return true }
+        return false
+    }
+
     private func row(at index: Int) -> some View {
         let track = tracks[index]
         let recommendationHandler = onRecommendationReplaced
@@ -667,7 +689,8 @@ struct TrackListView: View {
             onRemoved: { onRemoved?(track) },
             onRecommendationReplaced: recommendationContext == nil || recommendationHandler == nil
                 ? nil
-                : { replacement in recommendationHandler?(track, replacement) }
+                : { replacement in recommendationHandler?(track, replacement) },
+            keepArtworkWhileRefreshing: isPlaylistSource
         ) {
             player.play(tracks: playableTracks, source: source, startAt: track,
                         context: context)

@@ -41,7 +41,7 @@ struct Track: Codable, Hashable, Identifiable {
     let id: Int
     let name: String
     let artists: [ArtistRef]
-    let album: AlbumRef
+    private(set) var album: AlbumRef
     let durationMS: Int
     let alias: [String]
     let transNames: [String]
@@ -58,6 +58,15 @@ struct Track: Codable, Hashable, Identifiable {
     var artistNames: String { artists.map(\.name).joined(separator: " / ") }
     var duration: TimeInterval { TimeInterval(durationMS) / 1000 }
     var subtitle: String? { transNames.first ?? alias.first }
+
+    func preservingCover(from previous: Track) -> Track {
+        guard id == previous.id, album.picUrl?.isEmpty != false,
+              previous.album.id > 0, album.id == 0 || album.id == previous.album.id,
+              let cover = previous.album.picUrl, !cover.isEmpty else { return self }
+        var updated = self
+        updated.album = album.id == 0 ? previous.album : AlbumRef(id: album.id, name: album.name, picUrl: cover)
+        return updated
+    }
 
     private enum CodingKeys: String, CodingKey {
         case id, name

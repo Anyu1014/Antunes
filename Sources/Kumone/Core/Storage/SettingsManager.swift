@@ -1,5 +1,6 @@
 import SwiftUI
 
+/// 音质档位。
 enum AudioQuality: String, CaseIterable, Identifiable {
     case standard
     case higher
@@ -28,14 +29,6 @@ enum AudioQuality: String, CaseIterable, Identifiable {
         case .hires: return String(localized: "高解析")
         }
     }
-
-    /// 真正向服务端请求、并用于播放缓存的档位。
-    ///
-    /// 极高（`exhigh`）是逐首验证过、声音与进度条/歌词对得上的那条路径；
-    /// 其余档位拿到的文件在同一条播放链路上会出现音画不同步，因此这里按
-    /// 「其他音质一律以极高为标准」逐档关联到它。设置里用户看到的仍是自己
-    /// 选的档位，`下载音质` 走 `downloadQuality`，不受影响。
-    /// 回滚：删掉这个属性，把调用点改回 `audioQuality.rawValue`。
 }
 
 enum AppAppearance: String, CaseIterable, Identifiable {
@@ -484,12 +477,9 @@ final class SettingsManager: ObservableObject {
 
     private init() {
         let defaults = UserDefaults.standard
-        // 音质锁定为极高：播放与下载都只用 `exhigh`，不再读旧的档位设置，
-        // 界面上也不再提供选择。旧键保留只为兼容历史数据，值一律写回极高。
+        // 音质可选（七档，与 MeloX 一致）；旧键里存的 higher 归到高品质。
         audioQuality = .exhigh
-        defaults.set(AudioQuality.exhigh.rawValue, forKey: Keys.quality)
         downloadQuality = .exhigh
-        defaults.set(AudioQuality.exhigh.rawValue, forKey: Keys.downloadQuality)
         enableAudioCache = defaults.object(forKey: Keys.enableAudioCache) as? Bool ?? true
         // A size somebody chose stays chosen; the untouched default becomes automatic.
         audioCacheAutomatic = defaults.object(forKey: Keys.audioCacheAutomatic) as? Bool

@@ -20,6 +20,9 @@ struct MainWindow: View {
     @EnvironmentObject private var artworkStore: NowPlayingArtworkStore
     #endif
     @State private var selection: SidebarItem = .home
+    #if os(iOS)
+    @State private var previousNonSearchSection: SidebarItem = .home
+    #endif
     @State private var localPath: [Destination] = []
     @State private var showLogin = false
     @State private var mainColumnGeometry = MainColumnGeometry()
@@ -333,7 +336,20 @@ struct MainWindow: View {
                 .playerContentInset()
                 .appDestinations()
         }
-        .onChange(of: selection) { _ in
+        #if os(iOS)
+        .environment(\.closeSearch, {
+            if case .search = path.last {
+                path.removeLast()
+            } else if selection == .search {
+                selection = previousNonSearchSection
+                ensureVisibleSection()
+            }
+        })
+        #endif
+        .onChange(of: selection) { section in
+            #if os(iOS)
+            if section != .search { previousNonSearchSection = section }
+            #endif
             path = []
         }
     }

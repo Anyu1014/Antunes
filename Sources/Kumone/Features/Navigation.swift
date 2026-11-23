@@ -4,6 +4,19 @@ extension Notification.Name {
     static let showDownloadedMusic = Notification.Name("Kumone.showDownloadedMusic")
 }
 
+#if os(iOS)
+private struct FloatingChromeClearanceKey: EnvironmentKey {
+    static let defaultValue: CGFloat? = nil
+}
+
+extension EnvironmentValues {
+    var floatingChromeClearance: CGFloat? {
+        get { self[FloatingChromeClearanceKey.self] }
+        set { self[FloatingChromeClearanceKey.self] = newValue }
+    }
+}
+#endif
+
 private struct OpenLoginKey: EnvironmentKey {
     static let defaultValue: () -> Void = {}
 }
@@ -124,6 +137,9 @@ enum Destination: Hashable {
     case collections
     case cloud
     case search(String)
+    case listeningRank
+    case messages
+    case conversation(Int, String, Int)
 }
 
 extension Array where Element == Destination {
@@ -163,6 +179,12 @@ struct DestinationsModifier: ViewModifier {
                     CloudView()
                 case .search(let query):
                     SearchView(query: query)
+                case .listeningRank:
+                    ListeningRankView()
+                case .messages:
+                    MessagesView()
+                case .conversation(let userID, let nickname, let ownerID):
+                    ConversationView(userID: userID, nickname: nickname, ownerID: ownerID)
                 }
             }
             .playerContentInset()
@@ -198,11 +220,14 @@ struct PlayerClearanceSpacer: View {
     @EnvironmentObject private var player: PlayerService
     #if os(iOS)
     @EnvironmentObject private var settings: SettingsManager
+    @Environment(\.floatingChromeClearance) private var floatingChromeClearance
     #endif
 
     var body: some View {
         #if os(iOS)
-        if settings.onlyLibrarySection {
+        if let floatingChromeClearance {
+            Color.clear.frame(height: floatingChromeClearance)
+        } else if settings.onlyLibrarySection {
             Color.clear.frame(height: player.hasCurrentTrack
                 ? Theme.Layout.FloatingChrome.miniPlayerHeight
                     + Theme.Layout.FloatingChrome.bottomMargin

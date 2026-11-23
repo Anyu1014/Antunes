@@ -65,6 +65,15 @@ struct GlassTabBar: View {
                     ForEach(Array(items.enumerated()), id: \.element.id) { offset, item in
                         itemLabel(item, lit: offset == litIndex)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel(Text(item.title))
+                            .accessibilityIdentifier("section-tab-\(item.tab.rawValue)")
+                            .accessibilityAddTraits(.isButton)
+                            .accessibilityAddTraits(item.tab == selection ? .isSelected : [])
+                            .accessibilityAction {
+                                if item.tab == selection { onReselect(item.tab) }
+                                else { requestSwitch(to: item.tab) }
+                            }
                     }
                 }
             }
@@ -94,27 +103,29 @@ struct GlassTabBar: View {
         .contentShape(Rectangle())
     }
 
-    /// The sliding indicator is the system's Liquid Glass, untinted — the same
-    /// `.regular` lens the system tab bar draws. No tint, no stroke, no shadow,
-    /// no hand-mixed material: the lens reads by its own rim and refraction.
+
+    /// 选中镜片：系统 Liquid Glass，无 tint、无描边、无阴影，靠材质自己的
+    /// 边缘折射和顶部高光读出来。
+    @ViewBuilder
     private var selectionPill: some View {
-        // 自建磨砂。
-        // 原来 iOS 26 走的是系统 `glassEffect`：它在位置/尺寸每帧变化时都要
-        // 重新算一次折射与离屏模糊，而这块球随手指拖动、随选中项滑动，正好是
-        // 「每帧都在变」。底栏那两颗胶囊的玻璃保持系统材质不动，这里换成一层
-        // 固定成本的材质 + 细边 + 顶部高光，观感接近，但排版开销恒定。
-        Capsule(style: .continuous)
-            .fill(.ultraThinMaterial)
-            .overlay {
-                Capsule(style: .continuous)
-                    .fill(LinearGradient(colors: [.white.opacity(0.34), .white.opacity(0.02)],
-                                         startPoint: .top, endPoint: .bottom))
-                    .blendMode(.plusLighter)
-            }
-            .overlay {
-                Capsule(style: .continuous)
-                    .strokeBorder(.white.opacity(0.30), lineWidth: 0.6)
-            }
+        if #available(iOS 26.0, *) {
+            Capsule(style: .continuous)
+                .fill(.clear)
+                .glassEffect(.regular, in: Capsule(style: .continuous))
+        } else {
+            Capsule(style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay {
+                    Capsule(style: .continuous)
+                        .fill(LinearGradient(colors: [.white.opacity(0.34), .white.opacity(0.02)],
+                                             startPoint: .top, endPoint: .bottom))
+                        .blendMode(.plusLighter)
+                }
+                .overlay {
+                    Capsule(style: .continuous)
+                        .strokeBorder(.white.opacity(0.30), lineWidth: 0.6)
+                }
+        }
     }
 
     private func index(for x: CGFloat, cellW: CGFloat, count: Int) -> Int {
@@ -148,8 +159,6 @@ struct GlassTabBar: View {
     private func dragGesture(cellW: CGFloat, count: Int) -> some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
-                // Wait for a clear horizontal intent before "lifting" the pill,
-                // so a plain tap slides rather than teleporting to the finger.
                 if !isDragging && abs(value.translation.width) < 8 { return }
                 isDragging = true
                 dragX = value.location.x
@@ -175,10 +184,14 @@ struct GlassTabBar: View {
 /// 系统液态玻璃（iOS 26+），旧系统退回 `regularMaterial`。
 /// 注意：玻璃会折射它背后的内容，在浅色底栏上「无色玻璃」几乎等于隐形，
 /// 需要 `Glass.tint` 才看得出是一颗球——这是之前底栏像没有球的原因。
+///
+/// `.interactive()`：按住时由系统给玻璃本身加高光并轻微缩放回弹，和工具栏里
+/// 搜索/设置那两颗液态按钮用的是同一套反馈。底栏这三块是容器、不是 `Button`，
+/// 不加这个就只剩材质、没有按压态——按下去是死的。
 private struct NativeGlassCapsule: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
-            content.glassEffect(.regular, in: Capsule())
+            content.glassEffect(.regular.interactive(), in: Capsule())
         } else {
             content.background(Capsule().fill(.regularMaterial))
         }
@@ -188,9 +201,25 @@ private struct NativeGlassCapsule: ViewModifier {
 private struct NativeGlassCircle: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
-            content.glassEffect(.regular, in: Circle())
+            content.glassEffect(.regular.interactive(), in: Circle())
         } else {
             content.background(Circle().fill(.regularMaterial))
+        }
+    }
+}
+
+/// 同一个 `GlassEffectContainer` 里的两片玻璃靠得够近时会自己连成一片，
+/// 就是原生底栏里「选中胶囊和旁边那颗圆按钮吸在一起」的那道颈。
+/// 只有挂在容器里的形状才认这个 id；旧系统原样返回。
+private struct GlassMorphID: ViewModifier {
+    let id: String
+    let namespace: Namespace.ID
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.glassEffectID(id, in: namespace)
+        } else {
+            content
         }
     }
 }
@@ -198,6 +227,19 @@ private struct NativeGlassCircle: ViewModifier {
 extension View {
     func nativeGlassCapsule() -> some View { modifier(NativeGlassCapsule()) }
     func nativeGlassCircle() -> some View { modifier(NativeGlassCircle()) }
+    func glassMorphID(_ id: String, in namespace: Namespace.ID) -> some View {
+        modifier(GlassMorphID(id: id, namespace: namespace))
+    }
+
+    /// 只有调用方明确给了命名空间才挂 id（迷你播放条在竖屏不参与合并）。
+    @ViewBuilder
+    func glassMorphID(_ id: String, in namespace: Namespace.ID?) -> some View {
+        if let namespace {
+            glassMorphID(id, in: namespace)
+        } else {
+            self
+        }
+    }
 }
 
 #endif

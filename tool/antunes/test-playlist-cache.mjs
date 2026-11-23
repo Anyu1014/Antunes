@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
-import {uniqueTracks} from '../../android/app/src/main/assets/core.mjs';
+import {uniqueTracks,preserveTrackCovers} from '../../android/app/src/main/assets/core.mjs';
 const source=readFileSync(process.argv[2]||new URL('../../android/app/src/main/assets/app.js',import.meta.url),'utf8');
 const segment=(a,b)=>source.slice(source.indexOf(a),source.indexOf(b,source.indexOf(a)));
 const code=segment('async function render(){','function card(')+segment('async function cached(','async function homePage(')+
@@ -11,7 +11,7 @@ const snapshot=(name='Cached',ids=[1,2])=>({playlist:{id:7,name,coverImgUrl:'htt
 function fixture(cached=snapshot()){
  let resolve,reject;const response=new Promise((a,b)=>{resolve=a;reject=b;});
  const calls=[],writes=[];const page={dataset:{route:'playlist'},scrollTop:83,className:'',classList:{toggle(){}},innerHTML:'Cached'};
- const context={route:{kind:'playlist',id:7},renderID:0,detail:{kind:'playlist',id:7},listTracks:[],cache:new Map(cached?[['playlist-7',cached]]:[]),player:{queue:[],index:0},$:()=>page,renderChrome(){},watchPlaylistNavMerged(){},loading(){writes.push('loading');page.innerHTML='loading';},uniqueTracks,playlistDetails:(info,tracks)=>info.name+'|'+tracks.map(t=>t.id).join(','),setupPlaylistSearch(){},header:()=>'',empty:()=> 'error',button:()=>'',api:(path,payload)=>{calls.push({path,payload});return response;},updatePlaylistPage(info,tracks){writes.push(info.name);page.innerHTML=info.name+'|'+tracks.map(t=>t.id).join(',');}};
+ const context={route:{kind:'playlist',id:7},renderID:0,sessionGeneration:0,detail:{kind:'playlist',id:7},listTracks:[],cache:new Map(cached?[['playlist-7',cached]]:[]),player:{queue:[],index:0},$:()=>page,renderChrome(){},watchPlaylistNavMerged(){},preloadCoversAsync:async()=>{},loading(){writes.push('loading');page.innerHTML='loading';},uniqueTracks,preserveTrackCovers,playlistDetails:(info,tracks)=>info.name+'|'+tracks.map(t=>t.id).join(','),setupPlaylistSearch(){},header:()=>'',empty:()=> 'error',button:()=>'',api:(path,payload)=>{calls.push({path,payload});return response;},updatePlaylistPage(info,tracks){writes.push(info.name);page.innerHTML=info.name+'|'+tracks.map(t=>t.id).join(',');}};
  vm.createContext(context);vm.runInContext(code,context);return {context,page,calls,writes,resolve,reject};
 }
 const flush=async()=>{for(let n=0;n<12;n++)await Promise.resolve();};

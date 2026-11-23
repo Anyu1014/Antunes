@@ -351,9 +351,17 @@ struct NowPlayingView: View {
             }
             .frame(maxWidth: .infinity)
 
-            circleButton(icon: "backward.fill", size: 16) { player.previous() }
-                .accessibilityLabel("上一首")
-                .frame(maxWidth: .infinity)
+            // 横屏这一排和竖屏、紧凑版保持一致：漫游里"上一首"没有意义，
+            // 换成就地删除（不喜欢），把当前这首从漫游队列里剔掉。
+            if player.isFMMode {
+                circleButton(icon: "trash", size: 16) { player.fmTrash() }
+                    .accessibilityLabel("不喜欢，换一首")
+                    .frame(maxWidth: .infinity)
+            } else {
+                circleButton(icon: "backward.fill", size: 16) { player.previous() }
+                    .accessibilityLabel("上一首")
+                    .frame(maxWidth: .infinity)
+            }
             playPauseButton()
                 .frame(maxWidth: .infinity)
             circleButton(icon: "forward.fill", size: 16) { player.next() }

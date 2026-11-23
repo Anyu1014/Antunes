@@ -5,9 +5,10 @@ enum MusicAPI {
     private static var client: MusicClient { .shared }
 
     private static func eapi<T: Decodable>(
-        _ type: T.Type, _ path: String, _ payload: [String: Any] = [:]
+        _ type: T.Type, _ path: String, _ payload: [String: Any] = [:],
+        requiringAuthentication binding: String? = nil
     ) async throws -> T {
-        let data = try await client.eapi(path, payload)
+        let data = try await client.eapi(path, payload, requiringAuthentication: binding)
         return try client.decoded(T.self, from: data)
     }
 
@@ -319,6 +320,92 @@ enum MusicAPI {
         try await eapi(RecommendResourceResponse.self, "/v1/discovery/recommend/resource").recommend
     }
 
+    // MARK: - Homepage recommendation blocks
+
+    /// `/homepage/block/page`：网易云首页「推荐」的板块。标题、顺序、内容全部由服务端下发，
+    /// 所以板块列表跟着账号走（登录后才会出现「根据…为你推荐」这类个性化板块）。
+    struct HomePageResponse: Decodable {
+        let data: Payload?
+
+        struct Payload: Decodable {
+            let blocks: [Block]?
+        }
+
+        struct Block: Decodable {
+            let blockCode: String?
+            let uiElement: UIElement?
+            let creatives: [Creative]?
+
+            /// 板块标题：服务端有时给 subTitle，有时只给 mainTitle。
+            var title: String? {
+                [uiElement?.subTitle?.title, uiElement?.mainTitle?.title]
+                    .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .first { !$0.isEmpty }
+            }
+
+            /// 同一板块内按「类型+id」去重：服务端会在多个 creative 里重复同一张歌单。
+            var resources: [Creative.Resource] {
+                var seen = Set<String>()
+                return (creatives ?? []).flatMap { $0.resources ?? [] }
+                    .filter { seen.insert($0.dedupeKey).inserted }
+            }
+        }
+
+        struct UIElement: Decodable {
+            struct Title: Decodable { let title: String? }
+            struct Image: Decodable { let imageUrl: String? }
+
+            let mainTitle: Title?
+            let subTitle: Title?
+            let image: Image?
+        }
+
+        struct Creative: Decodable {
+            let resources: [Resource]?
+
+            struct Resource: Decodable {
+                let resourceType: String?
+                let resourceId: IdText?
+                let uiElement: UIElement?
+                let resourceExtInfo: Ext?
+
+                struct Ext: Decodable {
+                    let playCount: Int?
+                    let song: Track?
+                }
+
+                /// 服务端的 resourceId 有时是字符串、有时是数字。
+                struct IdText: Decodable {
+                    let text: String
+
+                    init(from decoder: Decoder) throws {
+                        let container = try decoder.singleValueContainer()
+                        if let string = try? container.decode(String.self) {
+                            text = string
+                        } else if let number = try? container.decode(Int64.self) {
+                            text = String(number)
+                        } else {
+                            text = ""
+                        }
+                    }
+                }
+
+                var id: Int { Int(resourceId?.text ?? "") ?? 0 }
+                var dedupeKey: String { "\(resourceType ?? "")|\(resourceId?.text ?? "")" }
+                var song: Track? { resourceExtInfo?.song }
+                var title: String? { uiElement?.mainTitle?.title }
+                var subtitle: String? { uiElement?.subTitle?.title }
+                var coverURL: String? { uiElement?.image?.imageUrl }
+            }
+        }
+    }
+
+    static func homepageBlocks() async throws -> [HomePageResponse.Block] {
+        let response = try await eapi(HomePageResponse.self, "/homepage/block/page",
+                                      ["refresh": false, "cursor": ""])
+        return response.data?.blocks ?? []
+    }
+
     struct RecommendSongsResponse: Decodable {
         struct Body: Decodable {
             let dailySongs: [Track]?
@@ -583,8 +670,8 @@ enum MusicAPI {
 
     static func songDownloadURL(id: Int, level: String, client: MusicClient = .shared) async throws -> SongURLData {
         struct Response: Decodable { let data: SongURLData? }
-        let body = try await client.eapi("/song/enhance/download/url/v1",
-                                         ["id": id, "level": level, "immerseType": "c51"])
+        var payload: [String: Any] = ["id": id, "level": level, "immerseType": "c51"]
+        let body = try await client.eapi("/song/enhance/download/url/v1", payload)
         let response = try client.decoded(Response.self, from: body)
         guard let data = response.data else { throw OfflineAudioError.unavailable }
         return data
@@ -805,9 +892,192 @@ enum MusicAPI {
         let result: [Item]
     }
 
+    /// 热歌榜（3778678）的歌曲，24 首。
+    /// 「近期云村热播」「最近的热门歌曲」两个板块的兜底数据源；
+    /// `/top/song` 在 eapi 下取不到（服务端回「接口未找到！」），所以走榜单详情。
+    static func hotChartSongs(limit: Int = 24) async throws -> [Track] {
+        let response = try await playlistDetail(id: 3_778_678)
+        return Array(response.playlist.tracks.prefix(limit))
+    }
+
     static func personalizedNewSongs(limit: Int = 10) async throws -> [Track] {
         let resp = try await eapi(PersonalizedNewsongResponse.self, "/personalized/newsong",
                                   ["type": "recommend", "limit": limit, "areaId": 0])
         return resp.result.compactMap(\.song)
+    }
+}
+
+// MARK: - 听歌排行 / 私信
+//
+// 接口与数据形状照搬备用源码 MeloX（`NeteaseAPI+UserPlayRecords`、`NeteaseSocialAPI`）：
+// 排行榜 `/v1/play/record`（type=1 最近一周、type=0 所有时间），
+// 私信 `/msg/private/{users,history,send}`。这里只做文本消息，不解析分享资源。
+
+struct PlayRecord: Decodable, Hashable {
+    let song: Track
+    let playCount: Int
+
+    enum CodingKeys: String, CodingKey { case song, playCount }
+}
+
+struct PlayRecordsResponse: Decodable {
+    let weekData: [PlayRecord]?
+    let allData: [PlayRecord]?
+}
+
+/// 私信里出现的人（会话两端、消息收发都用这个形状）。
+struct MessageContact: Decodable, Hashable {
+    let userId: Int?
+    let nickname: String?
+    let avatarUrl: String?
+    let remarkName: String?
+
+    /// 备注优先，其次昵称；都没有时用占位名。
+    var displayName: String {
+        if let remark = remarkName?.trimmingCharacters(in: .whitespacesAndNewlines), !remark.isEmpty {
+            return remark
+        }
+        if let nickname, !nickname.isEmpty { return nickname }
+        return String(localized: "网易云用户")
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case userId, nickname, avatarUrl, remarkName
+    }
+}
+
+struct PrivateConversation: Decodable, Hashable, Identifiable {
+    let fromUser: MessageContact?
+    let toUser: MessageContact?
+    let lastMsgTime: Int64?
+    /// 服务端给的是 JSON 字符串（`{"msg":"…"}`），解析失败时当纯文本。
+    let lastMsg: String?
+    let newMsgCount: Int?
+
+    var id: String {
+        [fromUser?.userId ?? 0, toUser?.userId ?? 0]
+            .sorted()
+            .map(String.init)
+            .joined(separator: "-")
+    }
+
+    /// 会话对方（不是自己的那一端）。
+    func peer(currentUserID: Int) -> MessageContact? {
+        if let fromUser, fromUser.userId != currentUserID { return fromUser }
+        if let toUser, toUser.userId != currentUserID { return toUser }
+        return fromUser ?? toUser
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case fromUser, toUser
+        case lastMsgTime = "lastMsgTime"
+        case lastMsg
+        case newMsgCount
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        fromUser = try c.decodeIfPresent(MessageContact.self, forKey: .fromUser)
+        toUser = try c.decodeIfPresent(MessageContact.self, forKey: .toUser)
+        lastMsgTime = try c.decodeIfPresent(Int64.self, forKey: .lastMsgTime)
+        lastMsg = try c.decodeIfPresent(String.self, forKey: .lastMsg)
+        newMsgCount = try c.decodeIfPresent(Int.self, forKey: .newMsgCount)
+    }
+}
+
+struct PrivateMessage: Decodable, Hashable {
+    let messageID: Int64
+    let fromUser: MessageContact?
+    let toUser: MessageContact?
+    let time: Int64?
+    /// 同样是 JSON 字符串包裹的正文。
+    let msg: String?
+
+    func isOutgoing(currentUserID: Int) -> Bool { fromUser?.userId == currentUserID }
+
+    var text: String { PrivateMessagePayload.text(from: msg) }
+
+    private enum CodingKeys: String, CodingKey {
+        case fromUser, toUser, time, msg, id
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        fromUser = try c.decodeIfPresent(MessageContact.self, forKey: .fromUser)
+        toUser = try c.decodeIfPresent(MessageContact.self, forKey: .toUser)
+        time = try c.decodeIfPresent(Int64.self, forKey: .time)
+        msg = try c.decodeIfPresent(String.self, forKey: .msg)
+        messageID = (try? c.decodeIfPresent(Int64.self, forKey: .id)) as? Int64 ?? (time ?? 0)
+    }
+}
+
+/// 私信正文解码：服务端把内容存成 `{"msg":"…","song":{…}}` 这样的字符串。
+enum PrivateMessagePayload {
+    static func text(from raw: String?) -> String {
+        guard let raw, !raw.isEmpty else { return "" }
+        guard let data = raw.data(using: .utf8),
+              let wire = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return raw
+        }
+        if let text = (wire["msg"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
+            return text
+        }
+        if let song = wire["song"] as? [String: Any], let name = song["name"] as? String {
+            return String(localized: "歌曲") + " · " + name
+        }
+        if let playlist = wire["playlist"] as? [String: Any], let name = playlist["name"] as? String {
+            return String(localized: "歌单") + " · " + name
+        }
+        if let album = wire["album"] as? [String: Any], let name = album["name"] as? String {
+            return String(localized: "专辑") + " · " + name
+        }
+        return String(localized: "消息")
+    }
+}
+
+private struct PrivateConversationsResponse: Decodable {
+    let msgs: [PrivateConversation]?
+}
+
+private struct PrivateHistoryResponse: Decodable {
+    let msgs: [PrivateMessage]?
+}
+
+extension MusicAPI {
+    static func userPlayRecords(userID: Int, week: Bool) async throws -> [PlayRecord] {
+        let response = try await eapi(
+            PlayRecordsResponse.self,
+            "/v1/play/record",
+            ["uid": userID, "type": week ? 1 : 0]
+        )
+        return ((week ? response.weekData : response.allData) ?? []).filter { $0.song.id > 0 }
+    }
+
+    static func privateConversations(binding: String) async throws -> [PrivateConversation] {
+        let response = try await eapi(
+            PrivateConversationsResponse.self,
+            "/msg/private/users",
+            ["offset": 0, "limit": 50, "total": true], requiringAuthentication: binding
+        )
+        return response.msgs ?? []
+    }
+
+    static func privateHistory(userID: Int, before: Int64? = nil, binding: String) async throws -> [PrivateMessage] {
+        // 首次加载传 time = -1：这个请求同时承担服务端已读上报（0 只会拿历史，不清未读）。
+        let response = try await eapi(
+            PrivateHistoryResponse.self,
+            "/msg/private/history",
+            ["userId": userID, "limit": 100, "time": before ?? -1, "total": true],
+            requiringAuthentication: binding
+        )
+        return (response.msgs ?? []).sorted { ($0.time ?? 0) < ($1.time ?? 0) }
+    }
+
+    static func sendPrivateText(_ text: String, to userID: Int, binding: String) async throws {
+        _ = try await eapi(
+            CodeOnly.self,
+            "/msg/private/send",
+            ["type": "text", "msg": text, "userIds": "[\(userID)]"], requiringAuthentication: binding
+        )
     }
 }

@@ -11,8 +11,8 @@ PRODUCT_BUNDLE_IDENTIFIER = com.antunes.app
 // PRODUCT_DISPLAY_NAME is not a real build setting; the Home Screen
 // name comes from CFBundleDisplayName.
 INFOPLIST_KEY_CFBundleDisplayName = Antunes
-MARKETING_VERSION = 1.6
-CURRENT_PROJECT_VERSION = 10
+MARKETING_VERSION = 1.7
+CURRENT_PROJECT_VERSION = 11
 DEVELOPMENT_TEAM =
 CODE_SIGN_STYLE = Automatic
 

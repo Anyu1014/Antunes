@@ -27,6 +27,9 @@ final class HomeViewModel: ObservableObject {
     }
 
     @Published var state: State = .idle
+    /// 服务端 `/homepage/block/page` 归纳出的板块（推荐歌单 / 近期云村热播 / 排行榜 …）。
+    /// 拿不到时为空，页面退回下面那套本地拼出来的板块。
+    @Published var sections: [HomeFeedSection] = []
     @Published var recommendPlaylists: [PlaylistSummary] = []
     @Published var radarPlaylists: [RadarPlaylist] = []
     @Published var toplists: [ToplistItem] = []
@@ -34,40 +37,112 @@ final class HomeViewModel: ObservableObject {
     @Published var topArtists: [ArtistSummary] = []
     @Published var dailyFirstCover: String?
 
-    func load(loggedIn: Bool) async {
-        if case .loaded = state { return }
-        state = .loading
+    private(set) var loadedAccountID: Int?
+    private var loadGeneration = 0
+    private var didFinishLoad = false
 
-        async let playlistsTask = fetchRecommendPlaylists(loggedIn: loggedIn)
-        async let toplistsTask = try? MusicAPI.toplists()
+    func load(accountID: Int?, force: Bool = false) async {
+        guard !Task.isCancelled, accountID == AccountStore.shared.authenticatedAccountID else { return }
+        if !force, loadedAccountID == accountID, didFinishLoad { return }
+        didFinishLoad = false
+        loadGeneration += 1
+        let generation = loadGeneration
+        if loadedAccountID != accountID {
+            state = .loading
+            recommendPlaylists = []
+            radarPlaylists = []
+            toplists = []
+            newAlbums = []
+            topArtists = []
+            sections = []
+            dailyFirstCover = nil
+        }
+        loadedAccountID = accountID
+        if case .loaded = state {} else { state = .loading }
+        func isCurrent() -> Bool {
+            generation == loadGeneration && accountID == AccountStore.shared.authenticatedAccountID
+                && !Task.isCancelled
+        }
+
+        async let blocksTask = try? MusicAPI.homepageBlocks()
         async let albumsTask = try? MusicAPI.newAlbums(limit: 20)
         async let artistsTask = try? MusicAPI.topArtists()
+        async let dailyTask = accountID == nil ? nil : (try? await MusicAPI.dailyRecommendSongs())?.first?.album.picUrl
 
-        let playlists = await playlistsTask
+        let primary = HomeFeed.sections(from: await blocksTask ?? [])
+        guard isCurrent() else { return }
+        if !primary.isEmpty {
+            sections = primary
+            state = .loaded
+        }
+
+        let missing = Set(HomeFeedSlot.allCases).subtracting(primary.map(\.slot))
+        async let playlistsTask = missing.contains(.recommendedPlaylists)
+            ? await fetchRecommendPlaylists(loggedIn: accountID != nil) : []
+        async let toplistsTask = missing.contains(.charts) ? (try? await MusicAPI.toplists()) : nil
+        async let topSongsTask = missing.contains(.recentlyTrending) || missing.contains(.regionalHits)
+            ? (try? await MusicAPI.hotChartSongs(limit: 24)) : nil
+        async let tailoredTask = missing.contains(.tailoredRecommendation)
+            ? (try? await MusicAPI.personalizedNewSongs(limit: 12)) : nil
+        async let roamingTask = accountID != nil && missing.contains(.likedSongRoaming)
+            ? (try? await MusicAPI.personalFM()) : nil
+        async let mineTask = missing.contains(.personalPlaylists)
+            ? await fetchOwnedPlaylists(uid: accountID) : []
+        async let radarTask = missing.contains(.radarPlaylists) ? await fetchRadarPlaylists() : []
+        async let similarTask = accountID != nil && missing.contains(.likedSongRecommendations)
+            ? await fetchSimilarSongs() : []
+        let (playlists, lists, albums, artists, topSongs, tailored, roaming, mine, radar, similar) =
+            await (playlistsTask, toplistsTask, albumsTask, artistsTask,
+                   topSongsTask, tailoredTask, roamingTask, mineTask, radarTask, similarTask)
+        guard isCurrent() else { return }
+
         recommendPlaylists = playlists
-        toplists = (await toplistsTask ?? []).filter {
-            [19_723_756, 3_779_629, 2_884_035, 3_778_678, 60198].contains($0.id)
+        let hot = topSongs ?? []
+        let fallbacks = HomeFeedFallbacks(
+            recommendedPlaylists: playlists.prefix(12).map(HomeFeedPlaylist.init),
+            charts: (lists ?? []).filter {
+                Self.featuredToplistIDs.contains($0.id)
+            }.prefix(12).map(HomeFeedPlaylist.init),
+            radarPlaylists: radar.map(HomeFeedPlaylist.init),
+            personalPlaylists: mine.prefix(12).map(HomeFeedPlaylist.init),
+            recentlyTrending: Array(hot.prefix(12)),
+            regionalHits: Array(hot.dropFirst(12).prefix(12)),
+            tailored: tailored ?? [],
+            roaming: roaming ?? [],
+            similar: Array(similar.prefix(12))
+        )
+        sections = HomeFeed.filling(primary, with: fallbacks)
+        toplists = (lists ?? []).filter { Self.featuredToplistIDs.contains($0.id) }
+        newAlbums = albums ?? []
+        topArtists = Array((artists ?? []).shuffled().prefix(6))
+        radarPlaylists = radar
+        state = playlists.isEmpty && newAlbums.isEmpty && sections.isEmpty
+            ? .error(String(localized: "网络连接失败")) : .loaded
+        let dailyCover = await dailyTask
+        if isCurrent() {
+            dailyFirstCover = dailyCover
+            if case .loaded = state { didFinishLoad = true }
         }
-        newAlbums = await albumsTask ?? []
-        let artists = await artistsTask ?? []
-        topArtists = Array(artists.shuffled().prefix(6))
-
-        if loggedIn {
-            if let daily = try? await MusicAPI.dailyRecommendSongs() {
-                dailyFirstCover = daily.first?.album.picUrl
-            }
-            await loadRadarPlaylists()
-        }
-
-        state = playlists.isEmpty && newAlbums.isEmpty ? .error(String(localized: "网络连接失败")) : .loaded
     }
 
-    func reload(loggedIn: Bool) async {
-        state = .idle
-        await load(loggedIn: loggedIn)
+    /// 官方榜里挑出来放在首页的那几个。
+    static let featuredToplistIDs: Set<Int> = [19_723_756, 3_779_629, 2_884_035, 3_778_678, 60198]
+
+    /// 「根据你喜爱的歌曲推荐」的兜底：拿喜欢的歌当种子走心动模式。
+    private func fetchSimilarSongs() async -> [Track] {
+        guard let liked = AccountStore.shared.likedSongsPlaylist,
+              let seed = AccountStore.shared.likedTrackIDs.first else { return [] }
+        return (try? await MusicAPI.intelligenceList(songID: seed, playlistID: liked.id)) ?? []
     }
 
-    private func loadRadarPlaylists() async {
+    /// 自己创建的歌单（「…的歌单」板块的兜底）。
+    private func fetchOwnedPlaylists(uid: Int?) async -> [PlaylistSummary] {
+        guard let uid else { return [] }
+        let all = (try? await MusicAPI.userPlaylists(uid: uid, limit: 200)) ?? []
+        return all.filter { $0.creator?.userId == uid && !$0.subscribed }
+    }
+
+    private func fetchRadarPlaylists() async -> [RadarPlaylist] {
         let briefs = await withTaskGroup(of: (Int, MusicAPI.PlaylistBrief.Body?).self) { group in
             for id in Self.radarPlaylistIDs {
                 group.addTask {
@@ -80,7 +155,7 @@ final class HomeViewModel: ObservableObject {
             }
             return byID
         }
-        radarPlaylists = Self.radarPlaylistIDs.compactMap { id in
+        return Self.radarPlaylistIDs.compactMap { id in
             guard let brief = briefs[id] else { return nil }
             // Names arrive as "今天从《…》听起|私人雷达" — split into title/subtitle.
             let parts = (brief.name ?? "").components(separatedBy: "|")
@@ -111,7 +186,8 @@ struct HomeView: View {
     var body: some View {
         GeometryReader { geometry in
             #if os(iOS)
-            if case .loaded = model.state, HomeView.splitsLandscape(geometry.size) {
+            if model.loadedAccountID == account.authenticatedAccountID,
+               case .loaded = model.state, HomeView.splitsLandscape(geometry.size) {
                 // 横屏：两栏各是独立的 ScrollView，竖滑和横划都只作用于手指所在的
                 // 半屏；文字用设计字号，只让卡片和间距适应半宽，不整体等比缩小。
                 HStack(alignment: .top, spacing: 0) {
@@ -126,23 +202,27 @@ struct HomeView: View {
             #endif
         }
         .navigationTitle("推荐")
-        .task(id: account.isLoggedIn) {
-            await model.load(loggedIn: account.isLoggedIn)
+        .task(id: account.authenticatedAccountID) {
+            await model.load(accountID: account.authenticatedAccountID)
         }
     }
 
     @ViewBuilder
     private func stateBody(_ size: CGSize) -> some View {
-        switch model.state {
-        case .idle, .loading:
+        if model.loadedAccountID != account.authenticatedAccountID {
             loadingBody
-        case .error(let message):
-            ErrorStateView(message: message) {
-                Task { await model.reload(loggedIn: account.isLoggedIn) }
+        } else {
+            switch model.state {
+            case .idle, .loading:
+                loadingBody
+            case .error(let message):
+                ErrorStateView(message: message) {
+                    Task { await model.load(accountID: account.authenticatedAccountID, force: true) }
+                }
+                .frame(minHeight: 400)
+            case .loaded:
+                loadedBody(cardSize: singleColumnCardSize(size))
             }
-            .frame(minHeight: 400)
-        case .loaded:
-            loadedBody(cardSize: singleColumnCardSize(size))
         }
     }
 
@@ -171,6 +251,9 @@ struct HomeView: View {
                        columns: side)
         }
         .frame(width: width)
+        // 两栏各是独立 ScrollView：系统自动选的时候只给一半挂顶边模糊，
+        // 另一半直接顶到屏幕上沿（右边看起来没有顶栏）。两栏都显式指定 soft。
+        .compatSymmetricTopEdgeEffect()
     }
     #endif
 
@@ -218,44 +301,57 @@ struct HomeView: View {
                     .padding(.top, 8)
             }
 
-            if columns != .right, !model.recommendPlaylists.isEmpty {
-                Shelf(title: "推荐歌单", rowHeight: Theme.Layout.coverShelfHeight) {
-                    ForEach(Array(model.recommendPlaylists.prefix(12).enumerated()), id: \.element.id) { index, playlist in
-                        playlistCard(playlist)
-                            .staggeredAppearance(index: index, id: "home-rec-\(playlist.id)")
+            if !model.sections.isEmpty {
+                // 板块顺序、标题都以服务端下发的为准（参考实现的九个板块，
+                // 不含「根据你听过的热门节目推荐」）。横屏分栏时按序号分到左右两栏。
+                ForEach(Array(model.sections.enumerated()), id: \.element.id) { index, section in
+                    if columns == .all || (columns == .left) == (index % 2 == 0) {
+                        sectionShelf(section)
                     }
                 }
-            }
+            } else {
+                // 服务端没给板块（未登录或接口失败）时，退回本地拼的这套。
+                if columns != .right, !model.recommendPlaylists.isEmpty {
+                    Shelf(title: "推荐歌单", rowHeight: Theme.Layout.coverShelfHeight) {
+                        ForEach(Array(model.recommendPlaylists.prefix(12).enumerated()), id: \.element.id) { index, playlist in
+                            playlistCard(playlist)
+                                .staggeredAppearance(index: index, id: "home-rec-\(playlist.id)")
+                        }
+                    }
+                }
 
-            if columns != .right, !model.radarPlaylists.isEmpty {
-                Shelf(title: "雷达歌单", rowHeight: Theme.Layout.coverShelfHeight) {
-                    ForEach(model.radarPlaylists) { radar in
-                        NavigationLink(value: Destination.radarPlaylist(radar.id)) {
-                            CoverCardBody(
-                                coverURL: radar.coverURL?.resizedImageURL(384),
-                                title: radar.title,
-                                subtitle: radar.subtitle,
-                                titleLineLimit: Theme.Layout.shelfTitleLineLimit
-                            ) {
-                                playPlaylist(radar.id)
+                if columns != .right, !model.radarPlaylists.isEmpty {
+                    Shelf(title: "雷达歌单", rowHeight: Theme.Layout.coverShelfHeight) {
+                        ForEach(model.radarPlaylists) { radar in
+                            NavigationLink(value: Destination.radarPlaylist(radar.id)) {
+                                CoverCardBody(
+                                    coverURL: radar.coverURL?.resizedImageURL(384),
+                                    title: radar.title,
+                                    subtitle: radar.subtitle,
+                                    titleLineLimit: Theme.Layout.shelfTitleLineLimit
+                                ) {
+                                    playPlaylist(radar.id)
+                                }
                             }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                     }
                 }
-            }
 
-            if columns != .left, !model.toplists.isEmpty {
-                Shelf(title: "排行榜", seeAll: nil, rowHeight: Theme.Layout.coverShelfHeight) {
-                    ForEach(model.toplists) { toplist in
-                        NavigationLink(value: Destination.playlist(toplist.id)) {
-                            toplistCard(toplist)
+                if columns != .left, !model.toplists.isEmpty {
+                    Shelf(title: "排行榜", seeAll: nil, rowHeight: Theme.Layout.coverShelfHeight) {
+                        ForEach(model.toplists) { toplist in
+                            NavigationLink(value: Destination.playlist(toplist.id)) {
+                                toplistCard(toplist)
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                     }
                 }
+
             }
 
+            // 新碟上架 / 推荐歌手：不在参考实现的九板块里，本项目保留，固定排在它们之后。
             if columns != .left, !model.newAlbums.isEmpty {
                 Shelf(title: "新碟上架", rowHeight: albumRowHeight) {
                     ForEach(model.newAlbums) { album in
@@ -285,6 +381,67 @@ struct HomeView: View {
         .padding(.top, Theme.Layout.pageTopPadding)
         .padding(.bottom, Theme.Layout.contentInset - 8)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: - Server sections
+
+    /// 一个服务端板块。歌单走封面卡，歌曲走「封面 + 歌名 + 歌手」的小卡。
+    @ViewBuilder
+    private func sectionShelf(_ section: HomeFeedSection) -> some View {
+        switch section.content {
+        case .playlists(let playlists):
+            Shelf(title: LocalizedStringKey(section.title),
+                  rowHeight: Theme.Layout.coverShelfHeight) {
+                ForEach(playlists) { playlist in
+                    NavigationLink(value: section.slot == .radarPlaylists
+                                   ? Destination.radarPlaylist(playlist.id) : .playlist(playlist.id)) {
+                        CoverCardBody(
+                            coverURL: playlist.coverURL?.resizedImageURL(384),
+                            title: playlist.name,
+                            subtitle: playlist.subtitle,
+                            playCount: playlist.playCount,
+                            titleLineLimit: Theme.Layout.shelfTitleLineLimit
+                        ) {
+                            playPlaylist(playlist.id)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        case .songs(let songs):
+            Shelf(title: LocalizedStringKey(section.title),
+                  rowHeight: Theme.Layout.cardSize + 46) {
+                ForEach(songs) { track in
+                    songCard(track, in: section)
+                }
+            }
+        }
+    }
+
+    /// 歌曲卡：点一下就从这首歌开始播整个板块。
+    private func songCard(_ track: Track, in section: HomeFeedSection) -> some View {
+        Button {
+            player.play(tracks: section.songs, source: .none, startAt: track)
+        } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                CachedAsyncImage(url: track.album.picUrl?.resizedImageURL(384))
+                    .frame(width: Theme.Layout.cardSize, height: Theme.Layout.cardSize)
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.standard,
+                                                style: .continuous))
+                Text(track.name)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Text(track.artistNames)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .frame(width: Theme.Layout.cardSize, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text("\(track.name) \(track.artistNames)"))
     }
 
     // MARK: - Feature cards
@@ -446,13 +603,17 @@ struct HomeView: View {
     }
 
     private func playPlaylist(_ id: Int) {
+        let intent = player.beginPlaybackIntent()
+        let owner = account.authenticatedAccountID
         Task {
             guard let detail = try? await MusicAPI.playlistDetail(id: id) else { return }
+            guard player.isCurrentPlaybackIntent(intent), owner == account.authenticatedAccountID else { return }
             var tracks = detail.playlist.tracks
             if tracks.isEmpty {
                 let ids = detail.playlist.trackIds.map(\.id)
                 tracks = (try? await MusicAPI.songDetails(ids: Array(ids.prefix(500))))?.songs ?? []
             }
+            guard player.isCurrentPlaybackIntent(intent), owner == account.authenticatedAccountID else { return }
             player.play(tracks: tracks, source: .playlist(id),
                         context: .playlist(id: id, name: detail.playlist.name))
         }

@@ -51,41 +51,34 @@ actor OfflineMetadataStore {
         return hasLyrics && hasArtwork
     }
 
-    /// 「存储空间」里的「歌词缓存」：所有账号目录下 lyrics-*.json 的总字节数。
-    nonisolated func lyricsBytes(excluding downloaded: Set<Int> = []) -> Int64 {
-        let fm = FileManager.default
-        guard let scopes = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else { return 0 }
-        var total: Int64 = 0
-        for folder in scopes {
-            guard let files = try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.fileSizeKey]) else { continue }
-            for file in files where file.lastPathComponent.hasPrefix("lyrics-") {
-                if let id = Int(file.deletingPathExtension().lastPathComponent.dropFirst("lyrics-".count)), downloaded.contains(id) { continue }
-                total += Int64((try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
-            }
-        }
-        return total
+    func lyricsBytes(scope: String, excluding protectedIDs: Set<Int>) -> Int64 {
+        (try? cachedLyricFiles(scope: scope, excluding: protectedIDs).reduce(Int64(0)) { bytes, file in
+            bytes + Int64((try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+        }) ?? 0
     }
 
-    /// 删除所有已缓存的歌词；下次播放或联网时会重新获取。
-    /// 删除一首歌的本地歌词（下载被删除时连带清理）。
-    nonisolated func removeLyrics(trackID: Int) {
-        let fm = FileManager.default
-        guard let scopes = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else { return }
-        for folder in scopes {
-            let file = folder.appendingPathComponent("lyrics-\(trackID).json")
-            if fm.fileExists(atPath: file.path) { try? fm.removeItem(at: file) }
+    func removeLyrics(trackIDs: Set<Int>, scope: String) {
+        let folder = folder(scope)
+        for id in trackIDs {
+            try? FileManager.default.removeItem(at: folder.appendingPathComponent("lyrics-\(id).json"))
         }
     }
 
-    func clearLyrics(excluding downloaded: Set<Int> = []) {
+    func clearLyrics(scope: String, excluding protectedIDs: Set<Int>) throws {
+        for file in try cachedLyricFiles(scope: scope, excluding: protectedIDs) {
+            try FileManager.default.removeItem(at: file)
+        }
+    }
+
+    private func cachedLyricFiles(scope: String, excluding protectedIDs: Set<Int>) throws -> [URL] {
+        let folder = folder(scope)
         let fm = FileManager.default
-        guard let scopes = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else { return }
-        for folder in scopes {
-            guard let files = try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil) else { continue }
-            for file in files where file.lastPathComponent.hasPrefix("lyrics-") {
-                if let id = Int(file.deletingPathExtension().lastPathComponent.dropFirst("lyrics-".count)), downloaded.contains(id) { continue }
-                try? fm.removeItem(at: file)
-            }
+        guard fm.fileExists(atPath: folder.path) else { return [] }
+        return try fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.fileSizeKey]).filter {
+            let name = $0.deletingPathExtension().lastPathComponent
+            guard $0.pathExtension == "json", name.hasPrefix("lyrics-"),
+                  let id = Int(name.dropFirst("lyrics-".count)) else { return false }
+            return !protectedIDs.contains(id)
         }
     }
 

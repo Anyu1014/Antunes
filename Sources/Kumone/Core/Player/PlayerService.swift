@@ -227,6 +227,15 @@ final class PlayerService: ObservableObject {
         return t.isFinite ? t : progress
     }
     private var resolveGeneration = 0
+    private var playbackIntent = UUID()
+
+    @discardableResult
+    func beginPlaybackIntent() -> UUID {
+        playbackIntent = UUID()
+        return playbackIntent
+    }
+
+    func isCurrentPlaybackIntent(_ intent: UUID) -> Bool { playbackIntent == intent }
     private var sourceTask: Task<Void, Never>?
     private var lyricsTask: Task<Void, Never>?
     private var currentAnalysisTask: Task<Void, Never>?
@@ -470,6 +479,7 @@ final class PlayerService: ObservableObject {
     ///   playing an ad-hoc selection (search results, a single track) omit it.
     func play(tracks: [Track], source: PlaySource, startAt track: Track? = nil,
               context: PlayContext? = nil) {
+        beginPlaybackIntent()
         guard !tracks.isEmpty else { return }
         if let context { recordRecent(context) }
         isFMMode = false
@@ -492,6 +502,7 @@ final class PlayerService: ObservableObject {
     }
 
     func playTrack(_ track: Track) {
+        beginPlaybackIntent()
         if let idx = activeQueue.firstIndex(where: { $0.id == track.id }) {
             currentIndex = idx
             startPlaying(track)
@@ -512,6 +523,7 @@ final class PlayerService: ObservableObject {
     }
 
     func togglePlayPause() {
+        beginPlaybackIntent()
         guard let track = currentTrack else { return }
         if isPlaying {
             pause()
@@ -535,6 +547,7 @@ final class PlayerService: ObservableObject {
     }
 
     func pause() {
+        beginPlaybackIntent()
         engine.pause()
         enginePaused = true
         isPlaying = false
@@ -544,6 +557,7 @@ final class PlayerService: ObservableObject {
     }
 
     func next() {
+        beginPlaybackIntent()
         // **Next during a hand-over lands on the incoming track, through the
         // hand-over.** Two cases, and neither of them is the hard cut this
         // used to be.
@@ -574,6 +588,7 @@ final class PlayerService: ObservableObject {
     }
 
     func previous() {
+        beginPlaybackIntent()
         if isFMMode { return }
         if progress > 4 || activeQueue.isEmpty {
             seek(to: 0)
@@ -807,6 +822,7 @@ final class PlayerService: ObservableObject {
     // MARK: - Personal FM
 
     func startFM() {
+        beginPlaybackIntent()
         guard !isFMMode || !isPlaying else { return }
         recordRecent(.fm)
         isFMMode = true
@@ -823,11 +839,13 @@ final class PlayerService: ObservableObject {
     }
 
     func fmNext() {
+        beginPlaybackIntent()
         guard isFMMode else { return }
         Task { await fmAdvance() }
     }
 
     func fmTrash() {
+        beginPlaybackIntent()
         guard isFMMode, let track = currentTrack else { return }
         Task {
             await fmAdvance()
@@ -1064,16 +1082,13 @@ final class PlayerService: ObservableObject {
     /// prefetch so both always derive identical keys. Pure: no toasts, no
     /// state changes.
     private func resolveSource(for track: Track) async -> ResolvedSource? {
-        let quality = AudioQuality.exhigh.rawValue  // 音质锁定极高，见 src/AGENTS.md
+        let quality = AudioQuality.exhigh.rawValue
         lastResolveFailure = nil
         guard !Task.isCancelled else { return nil }
         var data: SongURLData?
         do {
             data = try await MusicAPI.songURLRetrying(ids: [track.id], level: quality).first
             guard !Task.isCancelled else { return nil }
-            if data?.url == nil, quality != AudioQuality.standard.rawValue {
-                data = try await MusicAPI.songURLRetrying(ids: [track.id], level: AudioQuality.standard.rawValue).first
-            }
         } catch {
             // Kept for the 无法播放 toast: a request that failed is not the
             // same as a song the service refuses, and saying which helps.
@@ -3784,6 +3799,7 @@ final class PlayerService: ObservableObject {
 
     /// Reloads a place from the recents list and starts playing it again.
     func play(context: PlayContext) {
+        beginPlaybackIntent()
         // Personal FM is a stream, not a fixed list — restart it in place.
         guard context.kind != .fm else { return startFM() }
         Task {

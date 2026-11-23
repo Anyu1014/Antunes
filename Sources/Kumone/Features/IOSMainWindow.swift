@@ -20,8 +20,6 @@ public struct IOSMainWindow: View {
     }
 
     @State private var selectedTab: IOSTab = .home
-    /// 合并连续切板块时的窗口底色写入（见 scheduleWindowBackgroundRefresh）。
-    @State private var windowBackgroundTask: Task<Void, Never>?
     @State private var lyricsOpen = true
     @AppStorage("bottomBarLyrics") private var bottomBarLyrics = true
     @AppStorage("tabOrder") private var tabOrder = "home,fm,explore,search,library"
@@ -32,6 +30,19 @@ public struct IOSMainWindow: View {
     /// every download and playlist each time.
 
     @State private var lastForegroundRefresh: Date?
+    @State private var interfaceSize: CGSize = .zero
+    /// 冷启动首帧只构建当前板块的页面。原来五个页面在首帧全部建成（各有自己的
+    /// NavigationStack + 列表），首帧提交被拖到一秒级，期间只剩底色 —— 就是
+    /// 「偶发冷启动全白屏」。其余页面在第一次被切到时再建。
+    /// 已经完成过首帧布局的页面（`onAppear` 记一笔）。
+    /// 屏幕上真正露出来的那个板块。它只在目标页面**画出来之后**才跟过去，
+    /// 所以新板块还在建的那几十毫秒里，屏幕上是上一个板块，而不是它不透明的
+    /// 底色（「切到某板块先白一下」的来源）。
+    /// 界面尺寸只用来选横/竖布局与播放条宽度。**不能**把内容放进 `GeometryReader`
+    /// 里：冷启动第一趟布局 `geo.size` 可能是 0，那一帧所有页面都是 0×0，整屏只剩
+    /// 页面底色 —— 表现就是「偶发冷启动全白屏」。改成内容照常铺满、尺寸用偏好值补入。
+    /// 底栏两颗胶囊共用的玻璃容器命名空间：靠得够近时玻璃会连成一片。
+    @Namespace private var barGlass
     @State private var showLogin = false
     @State private var showSettings = false
     @State private var homePath: [Destination] = []
@@ -78,17 +89,18 @@ public struct IOSMainWindow: View {
             .onChange(of: bottomBarLyrics) { new in lyricsOpen = new }
             .onChange(of: settings.homeSectionVisibility) { _ in ensureVisibleTab() }
             .onChange(of: tabOrder) { _ in ensureVisibleTab() }
-            .task {
+            .task(priority: .utility) {
+                // 先让首帧提交，再去做下载扫描/账号恢复：这两件事占主线程，
+                // 放在首帧之前就是那段「全白」的直接来源。
+                await Task.yield()
                 await DownloadManager.shared.start()
                 await account.bootstrap()
             }
             .onChange(of: scenePhase) { phase in
                 guard phase == .active else { return }
-                // 从后台回来时窗口可能重建/换了 backing store，底色要重新按当前
-                // 板块写一遍，否则会有一帧是窗口默认白。
-                #if os(iOS)
-                applyWindowBackground()
-                #endif
+                // 这里**不再**重写 window.backgroundColor：那会让整窗失效、底栏玻璃
+                // 重采样，而它恰好发生在切回前台的那一帧，是「偶发白屏」的直接嫌疑。
+                // 底色现在由 `presentationRoot` 最外层的不透明层负责，与窗口无关。
                 if let last = lastForegroundRefresh, Date().timeIntervalSince(last) < 300 { return }
                 lastForegroundRefresh = Date()
                 Task {
@@ -141,6 +153,18 @@ public struct IOSMainWindow: View {
 
     @ViewBuilder
     private var presentationRoot: some View {
+        // 最外层永远先铺一页不透明底色：无论是板块页、播放页的
+        // `.presentationBackground(.clear)`，还是从后台回来时几何尺寸短暂为 0，
+        // 露出来的都是页面同色，而不是窗口的默认白（残留「偶发白屏」的来源）。
+        ZStack {
+            pageBackground(activeTab)
+                .ignoresSafeArea()
+            presentationContent
+        }
+    }
+
+    @ViewBuilder
+    private var presentationContent: some View {
         if UIDevice.current.userInterfaceIdiom == .phone {
             if #available(iOS 18.0, *) {
                 zoomNowPlayingRoot
@@ -195,9 +219,13 @@ public struct IOSMainWindow: View {
         }
     }
 
+    private var usesIPadSidebar: Bool {
+        UIDevice.current.userInterfaceIdiom == .pad && !settings.onlyLibrarySection
+    }
+
     @ViewBuilder
     private var appContent: some View {
-        if UIDevice.current.userInterfaceIdiom == .pad, !settings.onlyLibrarySection {
+        if usesIPadSidebar {
             MainWindow(path: $iPadPath)
         } else {
             tabInterface
@@ -302,42 +330,72 @@ public struct IOSMainWindow: View {
     }
 
     private var customTabInterface: some View {
-        GeometryReader { geo in
-            let horizontal = geo.size.width > geo.size.height && geo.size.width >= 500
+        customTabContent(size: interfaceSize)
+            .onPreferenceChange(InterfaceSizeKey.self) { size in
+                guard size.width > 0, size.height > 0, size != interfaceSize else { return }
+                interfaceSize = size
+            }
+    }
+
+    /// 正在看某段私聊：这一页要独占整块屏幕，底栏和迷你播放条都不出现。
+    private var isReadingConversation: Bool {
+        binding(for: activeTab).wrappedValue.contains { destination in
+            if case .conversation = destination { return true }
+            return false
+        }
+    }
+
+    /// 尺寸从偏好值里补进来；为 0 时按竖屏排版（此时不选横屏布局，避免闪一下再摆正）。
+    private func customTabContent(size: CGSize) -> some View {
+        Group {
+            let horizontal = size.width > size.height && size.width >= 500
                 && player.hasCurrentTrack && (lyricsOpen || !settings.onlyLibrarySection)
             let layout = horizontal
                 ? AnyLayout(HStackLayout(spacing: 10))
                 : AnyLayout(VStackLayout(spacing: 8))
-            let playerWidth = min(336, max(218, (geo.size.width - 24) * 0.38))
-            let barHeight: CGFloat = 64
+            let playerWidth = min(316, max(200, (size.width - 36) * 0.36))
+            let barHeight = Theme.Layout.FloatingChrome.tabBarHeight
+            let bottomOffset: CGFloat = -14
+            let chromeHeight = barHeight + (!horizontal && player.hasCurrentTrack
+                ? Theme.Layout.FloatingChrome.miniPlayerHeight + Theme.Layout.FloatingChrome.barSpacing : 0)
+            let clearance = isReadingConversation
+                ? 0
+                : (player.hasCurrentTrack || !settings.onlyLibrarySection
+                    ? chromeHeight + bottomOffset + Theme.Layout.FloatingChrome.extraPadding
+                    : Theme.Layout.scrollBreathingMargin)
 
-            ZStack(alignment: .bottom) {
-                ZStack {
-                    // 最底层永远是当前板块的底色：即使某一帧所有页面都被 opacity 置 0
-                    // （见 `renderedTabs` 的注释），露出的也是页面同色而不是窗口白。
-                    Color.clear
-                        .background(pageBackground(activeTab))
-                    if settings.showHome {
-                        page(.home) { tabStack(.home) { HomeView() } }
-                    }
-                    if settings.showExplore {
-                        page(.explore) { tabStack(.explore) { ExploreView() } }
-                    }
-                    if settings.showFM {
-                        page(.fm) { tabStack(.fm) { FMView() } }
-                    }
-                    if settings.showSearch {
-                        page(.search) { tabStack(.search) { SearchView(query: "") } }
-                    }
-                    page(.library) { tabStack(.library) { IOSLibraryView(showLogin: $showLogin) } }
+            ZStack {
+                // 最底层永远是当前板块的底色：即使某一帧所有页面都被 opacity 置 0
+                // （见 `renderedTabs` 的注释），露出的也是页面同色而不是窗口白。
+                Color.clear
+                    .background(pageBackground(activeTab))
+                if settings.showHome {
+                    page(.home) { tabStack(.home) { HomeView() } }
                 }
-                // 顶栏靠这个判断要不要换成渐进模糊；这里只取几何方向，和底栏
-                // 的 `horizontal`（还要求有正在播放的歌）解耦。
-                .environment(\.isLandscapeWindow, geo.size.width > geo.size.height && geo.size.width >= 500)
-
+                if settings.showExplore {
+                    page(.explore) { tabStack(.explore) { ExploreView() } }
+                }
+                if settings.showFM {
+                    page(.fm) { tabStack(.fm) { FMView() } }
+                }
+                if settings.showSearch {
+                    page(.search) { tabStack(.search) { SearchView(query: "") } }
+                }
+                page(.library) { tabStack(.library) { IOSLibraryView(showLogin: $showLogin) } }
+            }
+            // 顶栏靠这个判断要不要换成渐进模糊；这里只取几何方向，和底栏
+            // 的 `horizontal`（还要求有正在播放的歌）解耦。
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .environment(\.isLandscapeWindow, size.width > size.height && size.width >= 500)
+            .environment(\.floatingChromeClearance, clearance)
+            .overlay(alignment: .bottom) {
+                Group {
+                if !isReadingConversation {
                 layout {
                     if player.hasCurrentTrack {
-                        IOSMiniPlayerBar(presentation: .legacyOverlay, overlayHeight: horizontal ? barHeight : nil)
+                        IOSMiniPlayerBar(presentation: .legacyOverlay,
+                                         overlayHeight: horizontal ? barHeight : nil,
+                                         morphNamespace: horizontal ? barGlass : nil)
                             .nowPlayingTransitionSource(in: nowPlayingTransition)
                             .frame(width: horizontal ? playerWidth : nil)
                             .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -349,23 +407,38 @@ public struct IOSMainWindow: View {
                         BottomBarSlot { expanded, morphing in
                             bottomBar(width: bottom.size.width,
                                       tabBarExpanded: expanded,
-                                      morphing: morphing)
+                                      morphing: morphing,
+                                      // 横屏：两片玻璃要和迷你播放条待在同一个
+                                      // 容器里才会互相吸；容器由外层统一提供。
+                                      wrapsGlassContainer: !horizontal)
                         }
                     }
                     .frame(height: barHeight)
                 }
-                .padding(.horizontal, 12)
-                .padding(.bottom, 6)
+                // 横屏时播放控制器就在底栏左边一格，让它和歌词/板块胶囊进同一个
+                // 玻璃容器 —— 按住放大时它们会像原生底栏那样连出一道颈。
+                .modifier(PlayerGlassMerger(enabled: horizontal))
+                .padding(.horizontal, 18)
+                // 负留白把底栏压进安全区：底栏下缘到屏幕底 = 2 × 主页条中心到屏幕底（约 20pt），
+                // 主页条正好落在「底栏下缘 — 屏幕底」的中点。
+                .padding(.bottom, bottomOffset)
+                }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                .background {
+                    GeometryReader { geo in
+                        Color.clear.preference(key: InterfaceSizeKey.self, value: geo.size)
+                    }
+                    .allowsHitTesting(false)
+                }
+                // 键盘可覆盖两条底栏，但不改变它们的位置或横竖布局。
+                .ignoresSafeArea(.keyboard, edges: .bottom)
             }
             // 整屏底色：横屏左右两条安全区（刘海/圆角那两块）露的是窗口色，
             // 铺一层当前 tab 的底色并 ignore 安全区，才能和页面里一致。
             .background(pageBackground(activeTab).ignoresSafeArea())
         }
         .animation(AppAnimation.standard, value: player.hasCurrentTrack)
-        #if os(iOS)
-        .onAppear { applyWindowBackground() }
-        .onChange(of: selectedTab) { _ in scheduleWindowBackgroundRefresh() }
-        #endif
     }
 
     /// The bottom row, laid out the way Android's `.bar-row` does it. The two
@@ -376,7 +449,8 @@ public struct IOSMainWindow: View {
     /// its rounded ends survive the morph.
     private func bottomBar(width: CGFloat,
                            tabBarExpanded tabsExpanded: Binding<Bool>,
-                           morphing: Bool) -> some View {
+                           morphing: Bool,
+                           wrapsGlassContainer: Bool = true) -> some View {
         let setExpanded: (Bool) -> Void = { tabsExpanded.wrappedValue = $0 }
         let hasTrack = player.hasCurrentTrack
         let showsNav = !settings.onlyLibrarySection
@@ -415,7 +489,7 @@ public struct IOSMainWindow: View {
         }()
 
         // A persistent glass shell avoids crossfading two material snapshots during collapse.
-        return HStack(spacing: 10) {
+        let row = HStack(spacing: 10) {
             if lyricSlot {
                 ZStack(alignment: .leading) {
                     LyricStripPill(morphing: morphing)
@@ -424,16 +498,22 @@ public struct IOSMainWindow: View {
                         .contentShape(Rectangle())
                         .onTapGesture { setExpanded(false) }
                         .allowsHitTesting(!folded && tabsExpanded.wrappedValue)
+                        .accessibilityHidden(folded)
 
                     collapsedLyricButton(setExpanded: setExpanded)
                         .opacity(folded ? 1 : 0)
                         .animation(nil, value: folded)
                         .allowsHitTesting(folded)
+                        .accessibilityHidden(!folded)
                 }
                 .frame(width: lyricWidth, height: 64, alignment: .leading)
                 // 宽度动画期间只保留胶囊内的内容，别画到屏幕边上。
                 .clipShape(Capsule(style: .continuous))
+                // 整块玻璃都吃点击：否则点在歌词文字的留白上会穿到下面的歌单。
+                .contentShape(Capsule(style: .continuous))
                 .nativeGlassCapsule()
+                .glassMorphID("lyric", in: barGlass)
+                .onTapGesture { if !folded { setExpanded(false) } }
             }
 
             if showsNav {
@@ -445,19 +525,33 @@ public struct IOSMainWindow: View {
                         .frame(width: navTargetWidth, height: 64, alignment: .trailing)
                         .opacity(expanded ? 1 : 0)
                         .allowsHitTesting(expanded)
+                        .accessibilityHidden(!expanded)
 
                     avatarButton(setExpanded: setExpanded)
                         .opacity(expanded ? 0 : 1)
                         .allowsHitTesting(!expanded)
+                        .accessibilityHidden(expanded)
                 }
                 .frame(width: navWidth, height: 64, alignment: .trailing)
                 .clipShape(Capsule(style: .continuous))
                 .nativeGlassCapsule()
+                .glassMorphID("nav", in: barGlass)
+            }
+        }
+        // iOS 26：两颗胶囊放进同一个玻璃容器。系统会让靠得够近的两片玻璃
+        // 连成一片 —— 按住放大时就是原生底栏那种「吸过去」的颈；旧系统照旧。
+        return Group {
+            if wrapsGlassContainer, #available(iOS 26.0, *) {
+                GlassEffectContainer(spacing: 12) { row }
+            } else {
+                row
             }
         }
         // Without a lyric strip the row holds the tab pill alone; it stays
         // centred the way it was before the strip existed, as on Android.
         .frame(width: width, alignment: lyricSlot ? .leading : .center)
+        // 两颗胶囊之间的空隙也归底栏，别让点击漏到底下的内容上。
+        .background { Color.clear.contentShape(Rectangle()).onTapGesture {} }
         .animation(barAnimation, value: tabsExpanded.wrappedValue)
         .animation(barAnimation, value: lyricsOpen)
         .animation(barAnimation, value: hasTrack)
@@ -578,6 +672,7 @@ public struct IOSMainWindow: View {
     /// （`settings.showHome` / `showExplore` / `showSearch` 为 false），
     /// 那个页面根本不在视图树里，`page()` 会把所有页面 opacity 置 0，
     /// 整屏就只剩窗口底色 —— 表现就是偶发全白屏。这里统一夹到第一个可见板块。
+    /// 首帧只建当前板块；其余在第一次被选中时再建。
     private var activeTab: IOSTab {
         if renderedTabs.contains(selectedTab) { return selectedTab }
         return renderedTabs.first ?? .library
@@ -660,12 +755,12 @@ public struct IOSMainWindow: View {
 
     private func openDestination(_ destination: Destination) {
         player.showNowPlaying = false
-        if UIDevice.current.userInterfaceIdiom == .pad {
+        if usesIPadSidebar {
             iPadPath.appendIfNotCurrent(destination)
             return
         }
 
-        let path = binding(for: selectedTab)
+        let path = binding(for: activeTab)
         var destinations = path.wrappedValue
         destinations.appendIfNotCurrent(destination)
         path.wrappedValue = destinations
@@ -687,44 +782,8 @@ public struct IOSMainWindow: View {
         .publishesWindowHorizontalInsets()
     }
 
-    /// 每个 tab 自己的底色。横屏时左右两条安全区露的就是窗口底色，
-    /// 必须和页面本身同色才不会出现「两侧一条别的灰/白」。
+    /// 横屏的左右安全区由 SwiftUI 的页面底色铺满，不改写场景窗口。
     /// 「我的」是 grouped List（灰），其余页是普通 ScrollView（白）。
-    #if os(iOS)
-    /// 窗口本身的底色。SwiftUI 的 `.background` 铺不到的角落（圆角、
-    /// 刘海两侧、横屏左右两条安全区）露的就是这一层，必须跟着当前 tab 走。
-    private func applyWindowBackground() {
-        let color = UIColor(pageBackground(activeTab))
-        for scene in UIApplication.shared.connectedScenes {
-            guard let windowScene = scene as? UIWindowScene else { continue }
-            for window in windowScene.windows where !colorsMatch(window.backgroundColor, color) {
-                window.backgroundColor = color
-            }
-        }
-    }
-
-    /// 只有四个 tab 分两种底色（「我的」是分组灰，其余白），
-    /// 大部分切换其实不需要动窗口——写一次就会让整窗失效、底栏玻璃重采样一次。
-    private func colorsMatch(_ a: UIColor?, _ b: UIColor) -> Bool {
-        guard let a else { return false }
-        var ra: CGFloat = 0, ga: CGFloat = 0, ba: CGFloat = 0, aa: CGFloat = 0
-        var rb: CGFloat = 0, gb: CGFloat = 0, bb: CGFloat = 0, ab: CGFloat = 0
-        guard a.getRed(&ra, green: &ga, blue: &ba, alpha: &aa),
-              b.getRed(&rb, green: &gb, blue: &bb, alpha: &ab) else { return a == b }
-        return abs(ra - rb) < 0.002 && abs(ga - gb) < 0.002 && abs(ba - bb) < 0.002 && abs(aa - ab) < 0.002
-    }
-
-    /// 连续切板块时把窗口底色合并成一次：切 5 下只写 1 次，避免每次切换都整窗失效。
-    private func scheduleWindowBackgroundRefresh() {
-        windowBackgroundTask?.cancel()
-        windowBackgroundTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 140_000_000)
-            guard !Task.isCancelled else { return }
-            applyWindowBackground()
-        }
-    }
-    #endif
-
     private func pageBackground(_ tab: IOSTab) -> Color {
         #if os(iOS)
         tab == .library ? Color(uiColor: .systemGroupedBackground) : Platform.windowBackgroundColor
@@ -743,6 +802,7 @@ public struct IOSMainWindow: View {
             .environment(\.pageBaseColor, pageBackground(tab))
             .opacity(activeTab == tab ? 1 : 0)
             .allowsHitTesting(activeTab == tab)
+            .accessibilityHidden(activeTab != tab)
             .zIndex(activeTab == tab ? 1 : 0)
     }
 
@@ -778,6 +838,19 @@ extension IOSMainWindow {
 /// 于是底栏每动画一帧，四个页面 body 全部跟着重算一遍；连续点开合就把
 /// 主线程排满，表现为整个 App 卡死。把状态下放到这一层之后，动画帧只会
 /// 重画底栏本身。
+/// 横屏把迷你播放条和底栏放进同一个 `GlassEffectContainer`；竖屏保持原样。
+private struct PlayerGlassMerger: ViewModifier {
+    let enabled: Bool
+
+    func body(content: Content) -> some View {
+        if enabled, #available(iOS 26.0, *) {
+            GlassEffectContainer(spacing: 12) { content }
+        } else {
+            content
+        }
+    }
+}
+
 private struct BottomBarSlot<Content: View>: View {
     @State private var expanded = false
     /// 一次 morph 的时长。玻璃要按新宽度重采样、歌词要重排，
@@ -936,10 +1009,35 @@ struct IOSMiniPlayerBar: View {
     let presentation: Presentation
     var overlayHeight: CGFloat? = nil
     var onToggleLyrics: (() -> Void)?
+    /// 横屏时和歌词、板块胶囊共用同一个玻璃容器，会让靠得够近的两片玻璃吸在一起。
+    var morphNamespace: Namespace.ID? = nil
+
+    /// 长按发生的时刻。系统 `Button` 和 `TapGesture` 都在**抬手**时触发，
+    /// 所以长按之后松手同样会「进入播放页」；记下长按时刻，把紧跟着的那次
+    /// 抬手当成无效动作丢掉——长按只算按住，不产生跳转。
+    @State private var longPressAt: Date?
 
     var body: some View {
         playerBarSurface
+            .background {
+                // 胶囊里封面和三个按钮之外的留白，也算「轻点一次进入」，
+                // 免得点了条子却没反应。
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture { openNowPlayingIfShortTap() }
+            }
+            .simultaneousGesture(
+                LongPressGesture(minimumDuration: 0.4)
+                    .onEnded { _ in longPressAt = Date() }
+            )
             .simultaneousGesture(expandGesture)
+    }
+
+    /// 轻点一次进入播放页；长按之后的那次抬手不算。
+    private func openNowPlayingIfShortTap() {
+        if let t = longPressAt, Date().timeIntervalSince(t) < 0.6 { return }
+        longPressAt = nil
+        showNowPlaying()
     }
 
     @ViewBuilder
@@ -956,6 +1054,7 @@ struct IOSMiniPlayerBar: View {
             content
                 .frame(height: overlayHeight)
                 .nativeGlassCapsule()
+                .glassMorphID("player", in: morphNamespace)
                 .overlay {
                     Capsule()
                         .strokeBorder(.white.opacity(colorScheme == .dark ? 0.08 : 0.22),
@@ -973,15 +1072,16 @@ struct IOSMiniPlayerBar: View {
 
 
             if !presentation.isInline {
-                Button(action: player.previous) {
-                    Image(systemName: "backward.fill")
+                // 漫游里"上一首"没有意义：这一格换成删除，把当前这首从漫游里剔掉。
+                Button(action: player.isFMMode ? player.fmTrash : player.previous) {
+                    Image(systemName: player.isFMMode ? "trash" : "backward.fill")
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(.secondary)
                         .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.pressable)
-                .accessibilityLabel("上一首")
+                .accessibilityLabel(player.isFMMode ? "不喜欢，换一首" : "上一首")
             }
 
             Button(action: player.togglePlayPause) {
@@ -1013,7 +1113,7 @@ struct IOSMiniPlayerBar: View {
     }
 
     private var summarySlot: some View {
-        Button(action: showNowPlaying) {
+        Button(action: openNowPlayingIfShortTap) {
             trackSummary(for: player.currentTrack)
         }
         .buttonStyle(.plain)
@@ -1108,7 +1208,7 @@ struct IOSLibraryView: View {
 
     /// “我的音乐”那一组行的顺序与开关，读的是设置里同一批 AppStorage 键。
     private var libraryRowOrder: [String] {
-        let all = ["liked", "daily", "recents", "collections", "downloads", "cloud"]
+        let all = ["liked", "daily", "recents", "rank", "collections", "downloads", "cloud"]
         let order = libraryOrder.split(separator: ",").map(String.init)
         return all
             .sorted { (order.firstIndex(of: $0) ?? 99) < (order.firstIndex(of: $1) ?? 99) }
@@ -1127,6 +1227,7 @@ struct IOSLibraryView: View {
         }
     }
 
+
     @ViewBuilder
     private func libraryRow(_ key: String) -> some View {
         switch key {
@@ -1144,6 +1245,10 @@ struct IOSLibraryView: View {
         case "recents":
             NavigationLink(value: Destination.recents) {
                 Label("最近播放", systemImage: "clock.fill")
+            }
+        case "rank":
+            NavigationLink(value: Destination.listeningRank) {
+                Label("听歌排行", systemImage: "chart.bar.xaxis")
             }
         case "collections":
             NavigationLink(value: Destination.collections) {
@@ -1196,6 +1301,10 @@ struct IOSLibraryView: View {
             // 的开关无关；两个按钮放进同一个 HStack，间距由这里定。
             ToolbarItem(placement: .topBarTrailing) {
                 HStack(spacing: 12) {
+                    NavigationLink(value: Destination.messages) {
+                        Image(systemName: "bubble.left.and.bubble.right")
+                    }
+                    .accessibilityLabel("私信")
                     if librarySearchButton {
                         Button {
                             openSearch()
@@ -1203,6 +1312,7 @@ struct IOSLibraryView: View {
                             Image(systemName: "magnifyingglass")
                         }
                         .accessibilityLabel("搜索音乐")
+                        .accessibilityIdentifier("library-search-button")
                     }
                     Button {
                         presentSettingsSheet()
@@ -1308,6 +1418,7 @@ struct IOSLibraryView: View {
                                 NavigationLink(value: Destination.playlist(playlist.id)) {
                                     HStack(spacing: 10) {
                                         CachedAsyncImage(url: playlist.coverURL?.resizedImageURL(80), animated: false)
+                                        .task(id: playlist.coverURL) { await ImageCache.shared.prefetch(playlist.coverURL?.resizedImageURL(512)) }
                                             .frame(width: 32, height: 32)
                                             .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                                         VStack(alignment: .leading, spacing: 1) {
@@ -1342,6 +1453,7 @@ struct IOSLibraryView: View {
                             NavigationLink(value: Destination.playlist(playlist.id)) {
                                 HStack(spacing: 10) {
                                     CachedAsyncImage(url: playlist.coverURL?.resizedImageURL(80), animated: false)
+                                        .task(id: playlist.coverURL) { await ImageCache.shared.prefetch(playlist.coverURL?.resizedImageURL(512)) }
                                         .frame(width: 32, height: 32)
                                         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                                     VStack(alignment: .leading, spacing: 1) {
@@ -1632,5 +1744,14 @@ private struct SlideOffset: ViewModifier, Animatable {
 
     func body(content: Content) -> some View {
         content.offset(y: -k * height)
+    }
+}
+
+/// 底栏覆盖层报告不受键盘影响的尺寸，不用几何测量包住页面。
+private struct InterfaceSizeKey: PreferenceKey {
+    static var defaultValue: CGSize = .zero
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
+        let next = nextValue()
+        if next.width > 0, next.height > 0 { value = next }
     }
 }

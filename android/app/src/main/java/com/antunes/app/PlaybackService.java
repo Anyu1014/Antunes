@@ -90,7 +90,7 @@ public class PlaybackService extends Service {
             try {
                 String id=""+track.getLong("id");
                 File offline=new File(getFilesDir(), "audio/"+id+".audio");
-                String url=offline.exists() ? offline.getAbsolutePath() : api.audioURL(track.getLong("id"),"exhigh")  /* 音质锁定极高 */;
+                String url=offline.exists() ? offline.getAbsolutePath() : api.audioURL(track.getLong("id"),getSharedPreferences("player",MODE_PRIVATE).getString("quality","exhigh"));
                 handler.post(() -> { if(token!=generation)return; try {
                     player=new MediaPlayer();
                     player.setWakeMode(this, PowerManager.PARTIAL_WAKE_LOCK);

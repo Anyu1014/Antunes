@@ -139,6 +139,20 @@ extension View {
         #endif
     }
 
+    /// 统一滚动视图顶边的边缘效果（iOS 26+）。
+    ///
+    /// 横屏的推荐页是左右两个独立 `ScrollView`。交给系统自动选的时候，它只给
+    /// 其中一半挂了这层效果，另一半直接顶到屏幕上沿——看起来就是「右边没有顶栏」。
+    /// 这里两栏都显式指定 `soft`（就是系统导航栏下面那层模糊），左右才一致。
+    @ViewBuilder
+    func compatSymmetricTopEdgeEffect() -> some View {
+        if #available(iOS 26.0, *) {
+            scrollEdgeEffectStyle(.soft, for: .top)
+        } else {
+            self
+        }
+    }
+
     /// iOS 顶部吸顶条。
     ///
     /// 竖屏：整条磨砂，列表从下面滑过时还能透出一点，和安卓端顶栏的
@@ -149,10 +163,11 @@ extension View {
         modifier(TopBarBackground(portraitFrosted: true))
     }
 
-    /// 只在横屏生效的顶栏处理：去掉系统导航栏的实底，换成自建渐进模糊；
-    /// 竖屏原样返回，不碰任何默认样式。
+    /// 横屏顶栏：一律交给系统原生导航栏（那块玻璃由系统自己画），不再自建渐隐层；
+    /// 内容滚到顶栏下面时用 `soft` 边缘效果，和「推荐」页两栏完全一致。
+    /// 竖屏原样返回，不改任何默认样式。
     func progressiveTopBarInLandscape() -> some View {
-        modifier(TopBarBackground(portraitFrosted: false))
+        modifier(LandscapeTopEdgeEffect())
     }
 
     /// Glass background with a graceful material fallback on macOS 15.
@@ -203,50 +218,31 @@ extension EnvironmentValues {
     }
 }
 
-struct ProgressiveTopBlur: View {
-    var height: CGFloat = 96
-    var fadeStart: CGFloat = 0.34
-    @Environment(\.pageBaseColor) private var baseColor
+/// 横屏下给页面里的滚动视图统一指定系统边缘效果（就是导航栏下面那层模糊）。
+/// 只在横屏生效：竖屏保持系统默认，不插手。
+private struct LandscapeTopEdgeEffect: ViewModifier {
+    @Environment(\.isLandscapeWindow) private var isLandscape
 
-    var body: some View {
-        // 用页面底色本身做渐隐：顶栏区域和屏幕底层完全同色，
-        // 内容滚到下面时再逐渐淡出，不会像材质那样把颜色抬亮一档。
-        Rectangle()
-            .fill(baseColor)
-            .mask(
-                LinearGradient(
-                    stops: [
-                        .init(color: .black, location: 0),
-                        .init(color: .black, location: fadeStart),
-                        .init(color: .clear, location: 1)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            )
-            .frame(maxWidth: .infinity)
-            .frame(height: height)
-            // 横屏时左右也要贯穿整屏，否则只在安全区里那一条有模糊。
-            .ignoresSafeArea(edges: .top)
-            .allowsHitTesting(false)
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            if isLandscape {
+                content.scrollEdgeEffectStyle(.soft, for: .top)
+            } else {
+                content
+            }
+        } else {
+            content
+        }
     }
 }
 
 struct TopBarBackground: ViewModifier {
-    /// 竖屏是否保留原来的整条磨砂导航栏。
+    /// 是否给导航栏铺一层整条磨砂。
     var portraitFrosted: Bool
-    @Environment(\.isLandscapeWindow) private var isLandscape
 
     func body(content: Content) -> some View {
         #if os(iOS)
-        if isLandscape {
-            content
-                .compatHiddenToolbarBackground()
-                .overlay(alignment: .top) {
-                    ProgressiveTopBlur()
-                        .frame(maxWidth: .infinity, alignment: .topLeading)
-                }
-        } else if portraitFrosted {
+        if portraitFrosted {
             content
                 .toolbarBackground(.visible, for: .navigationBar)
                 .toolbarBackground(.ultraThinMaterial, for: .navigationBar)

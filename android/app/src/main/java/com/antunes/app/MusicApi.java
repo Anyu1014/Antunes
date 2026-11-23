@@ -13,6 +13,8 @@ import java.io.*;
 import java.net.*;
 import java.nio.charset.StandardCharsets;
 import java.security.*;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.*;
 
 final class MusicApi {
@@ -23,6 +25,10 @@ final class MusicApi {
     private long epoch = 0;
     private static final Set<String> PATHS = Set.of(
         "/personalized/playlist", "/v1/discovery/recommend/resource", "/v3/discovery/recommend/songs",
+        "/homepage/block/page",
+        "/top/song",
+        "/personalized/newsong",
+        "/simi/song",
         "/toplist", "/album/new", "/toplist/artist", "/playlist/list", "/playlist/highquality/list",
         "/v6/playlist/detail", "/v3/song/detail", "/cloudsearch/pc", "/search/suggest/web", "/search/defaultkeyword/get",
         "/song/enhance/player/url/v1", "/song/enhance/player/url", "/song/enhance/download/url/v1", "/song/lyric/v1", "/song/lyric",
@@ -30,7 +36,8 @@ final class MusicApi {
         "/sms/captcha/sent", "/w/login/cellphone", "/logout", "/user/playlist", "/song/like/get",         "/album/sublist", "/artist/sublist", "/playmode/intelligence/list",
         "/playlist/create", "/playlist/remove", "/playlist/subscribe", "/playlist/unsubscribe", "/playlist/manipulate/tracks",
         "/album/sub", "/album/unsub", "/artist/sub", "/artist/unsub", "/v1/discovery/simiSong",
-        "/v1/radio/get", "/radio/trash/add", "/v1/comment/like", "/v1/comment/unlike", "/cloud/get", "/cloud/del", "/play-record/song/list", "/feedback/weblog");
+        "/v1/radio/get", "/radio/trash/add", "/v1/play/record", "/msg/private/users", "/msg/private/history", "/msg/private/send",
+        "/v1/comment/like", "/v1/comment/unlike", "/cloud/get", "/cloud/del", "/play-record/song/list", "/feedback/weblog");
     MusicApi(Context context) throws Exception {
         prefs = context.getSharedPreferences("api", Context.MODE_PRIVATE);
         String device = prefs.getString("device", "");
@@ -54,6 +61,7 @@ final class MusicApi {
         c.init(Cipher.DECRYPT_MODE, key(), new GCMParameterSpec(128, Base64.decode(parts[0], Base64.NO_WRAP)));
         return new String(c.doFinal(Base64.decode(parts[1], Base64.NO_WRAP)), StandardCharsets.UTF_8);
     }
+    synchronized long sessionEpoch() { return epoch; }
     synchronized boolean loggedIn() { return !cookies.optString("MUSIC_U").isEmpty(); }
     private synchronized void saveCookies(JSONObject value) throws Exception {
         String encoded = seal(value.toString());
@@ -85,13 +93,23 @@ final class MusicApi {
         return PATHS.contains(bare) || bare.matches("/(v1/(album|artist)|artist/albums)/[0-9]+") || bare.matches("/v1/resource/comments/R_SO_4_[0-9]+");
     }
     JSONObject request(String path, JSONObject payload) throws Exception {
+        return request(path, payload, sessionEpoch());
+    }
+    JSONObject request(String path, JSONObject payload, long submittedSession) throws Exception {
         if (!allowedPath(path)) {
             Log.w("AntunesApi", "未识别的接口: " + path + " payload=" + payload);
             // 把路径带进提示，出错时一眼能看出是哪个接口，而不是只有一句「未识别的接口」。
             throw new Exception("未识别的接口: " + path);
         }
         JSONObject jar; long generation;
-        synchronized (this) { jar = new JSONObject(cookies.toString()); generation = epoch; }
+        synchronized (this) {
+            // A queued private request must not inherit a newly logged-in account.
+            if (path.startsWith("/msg/private/") && submittedSession != epoch) {
+                throw new IOException("登录状态已改变，请重试");
+            }
+            jar = new JSONObject(cookies.toString());
+            generation = epoch;
+        }
         return transport(path, payload, jar, generation);
     }
     private JSONObject transport(String path, JSONObject payload, JSONObject jar, long generation) throws Exception {
@@ -141,26 +159,23 @@ final class MusicApi {
             return result;
         } finally { con.disconnect(); }
     }
-    String audioURL(long id, String ignoredQuality) throws Exception {
-        // 音质锁定极高：不再接受其它档位。
+    String audioURL(long id, String requestedQuality) throws Exception {
         String quality = "exhigh";
-        JSONObject first = null;
-        try {
-            JSONObject result = request("/song/enhance/player/url/v1", new JSONObject().put("ids", "["+id+"]").put("level", quality).put("encodeType", "flac"));
-            first = result.getJSONArray("data").getJSONObject(0);
-            String candidate = first.optString("url", "");
-            if (candidate.isEmpty() || candidate.equals("null")) first = null;
-        } catch (IOException e) { first = null; }
-        if (first == null) {
-            // v1 is risk-gated for some client builds; the older endpoint still answers.
-            JSONObject result = request("/song/enhance/player/url", new JSONObject().put("ids", "["+id+"]").put("br", 320000));
-            first = result.getJSONArray("data").getJSONObject(0);
+        JSONObject result = request("/song/enhance/player/url/v1", new JSONObject()
+                .put("ids", "["+id+"]").put("level", quality).put("encodeType", "flac"));
+        JSONObject found = result.getJSONArray("data").getJSONObject(0);
+        String url = found.optString("url", "");
+        if (url.isEmpty() || url.equals("null")) {
+            // v1 对部分客户端会拦，老接口还能答。
+            JSONObject legacy = request("/song/enhance/player/url", new JSONObject().put("ids", "["+id+"]").put("br", 320000));
+            found = legacy.getJSONArray("data").getJSONObject(0);
+            url = found.optString("url", "");
         }
-        String url = first.optString("url", "");
         if (url.isEmpty() || url.equals("null")) throw new IOException("当前歌曲暂无可播放音源");
         // A trial fragment is what the account is entitled to; play it rather than failing.
         return checkedMediaURL(url);
     }
+
     static String checkedMediaURL(String value) throws Exception {
         URI uri = URI.create(value); String host = uri.getHost();
         if (host == null || !host.endsWith(".music.126.net") || uri.getUserInfo() != null || (uri.getPort() != -1 && uri.getPort() != 443 && uri.getPort() != 80) || !Set.of("http", "https").contains(uri.getScheme())) throw new IOException("音频地址无效");

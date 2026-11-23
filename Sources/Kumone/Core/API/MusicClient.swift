@@ -214,10 +214,16 @@ final class MusicClient: @unchecked Sendable {
         }
     }
 
-    private func cookieHeader(extra: [String: String], overrides: [String: String] = [:]) -> String {
-        cookieLock.lock()
-        var all = cookies
-        cookieLock.unlock()
+    private func cookieHeader(extra: [String: String], overrides: [String: String] = [:],
+                              snapshot: [String: String]? = nil) -> String {
+        var all: [String: String]
+        if let snapshot {
+            all = snapshot
+        } else {
+            cookieLock.lock()
+            all = cookies
+            cookieLock.unlock()
+        }
         for (k, v) in extra where all[k] == nil { all[k] = v }
         for (k, v) in overrides { all[k] = v }
         return all.map { "\($0.key)=\($0.value)" }.joined(separator: "; ")
@@ -261,9 +267,16 @@ final class MusicClient: @unchecked Sendable {
     /// cookie alike: the risk control
     /// refuses some writes from a client it does not recognize, so requests
     /// go this way unless they are refused through it.
+    private func requestCredentials() -> (authentication: (epoch: UInt64, binding: String?), cookies: [String: String]) {
+        cookieLock.lock(); defer { cookieLock.unlock() }
+        return ((authEpoch, sessionBinding), cookies)
+    }
+
     func eapi(_ path: String, _ payload: [String: Any] = [:],
-              cookieOverrides: [String: String] = [:], absorbResponseCookies: Bool = true) async throws -> Data {
-        let authentication = authenticationState
+              cookieOverrides: [String: String] = [:], absorbResponseCookies: Bool = true,
+              requiringAuthentication binding: String? = nil) async throws -> Data {
+        let (authentication, cookieSnapshot) = requestCredentials()
+        if let binding, authentication.binding != binding { throw CancellationError() }
         guard let webHost = Upstream.webHost, let interfaceHost = Upstream.interfaceHost,
               let url = URL(string: "https://\(interfaceHost)/eapi\(path)") else {
             throw MusicAPIError.notConfigured
@@ -283,10 +296,10 @@ final class MusicClient: @unchecked Sendable {
             "resolution": "1920x1080",
             "channel": Self.eapiChannel,
             "requestId": String(format: "%lld_%04d", Int64(now * 1000), Int(now * 1_000_000) % 1000),
-            "__csrf": cookie(named: "__csrf") ?? "",
+            "__csrf": cookieSnapshot["__csrf"] ?? "",
         ]
-        if let musicU = cookie(named: "MUSIC_U") { header["MUSIC_U"] = musicU }
-        if let nmtid = cookie(named: "NMTID") { header["NMTID"] = nmtid }
+        if let musicU = cookieSnapshot["MUSIC_U"] { header["MUSIC_U"] = musicU }
+        if let nmtid = cookieSnapshot["NMTID"] { header["NMTID"] = nmtid }
         body["header"] = header
         body["e_r"] = false
         let json = try JSONSerialization.data(withJSONObject: body)
@@ -297,7 +310,7 @@ final class MusicClient: @unchecked Sendable {
         request.setValue(Self.eapiUserAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("https://\(webHost)", forHTTPHeaderField: "Referer")
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.setValue(cookieHeader(extra: header, overrides: cookieOverrides), forHTTPHeaderField: "Cookie")
+        request.setValue(cookieHeader(extra: header, overrides: cookieOverrides, snapshot: cookieSnapshot), forHTTPHeaderField: "Cookie")
         request.httpBody = Self.encodeForm(form)
         return try await perform(request, authentication: authentication, absorbResponseCookies: absorbResponseCookies)
     }

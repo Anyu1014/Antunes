@@ -17,6 +17,18 @@ import Testing
         return try JSONDecoder().decode(MusicAPI.PlaylistDetailResponse.self, from: JSONSerialization.data(withJSONObject: json))
     }
 
+    @Test func incompleteAlbumDoesNotReplaceKnownArtwork() throws {
+        let known = try JSONDecoder().decode(Track.self, from: Data(
+            #"{"id":12,"al":{"id":42,"name":"Original","picUrl":"https://example.test/cover"}}"#.utf8))
+        let incomplete = try JSONDecoder().decode(Track.self, from: Data(#"{"id":12,"name":"New metadata"}"#.utf8))
+        let updated = incomplete.preservingCover(from: known)
+        #expect(updated.album == known.album)
+        #expect(updated.name == "New metadata")
+
+        let changed = try JSONDecoder().decode(Track.self, from: Data(#"{"id":12,"al":{"id":84,"name":"Replacement"}}"#.utf8))
+        #expect(changed.preservingCover(from: known).album.picUrl == nil)
+    }
+
     @Test(arguments: [false, true])
     func warmSnapshotIsVisibleBeforeLoadAndDoesNotLeakAcrossAccounts(empty: Bool) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

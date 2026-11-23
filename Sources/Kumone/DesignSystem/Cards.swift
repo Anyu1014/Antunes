@@ -55,9 +55,10 @@ struct CoverCard: View {
         }
         .buttonStyle(.interactiveCard)
         .onHover { isHovering = $0 }
-        // 列表阶段就把详情页那张 384 的图悄悄拉进缓存，进详情页直接命中，不闪占位图。
-        .task(id: coverURL) {
-            ImageCache.shared.prefetch(coverURL.flatMap { ImageCache.variant(of: $0, size: 384) })
+        // 列表阶段就把「详情页要显示的那一张」悄悄拉进缓存：缓存过一次之后，
+        // 再进详情页是同步命中、直接显示，不再有占位/加载的闪烁。
+        .task(id: displayURL) {
+            await ImageCache.shared.prefetch(displayURL)
         }
     }
 

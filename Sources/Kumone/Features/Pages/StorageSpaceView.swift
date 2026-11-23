@@ -5,9 +5,11 @@ struct StorageSpaceView: View {
     let onManageDownloads: () -> Void
     @StateObject private var model = StorageSpaceModel()
     @EnvironmentObject private var settings: SettingsManager
+    @EnvironmentObject private var account: AccountStore
+    @State private var lyricBytes: Int64 = 0
+    @State private var isClearingLyrics = false
     #if os(iOS)
     @State private var automaticLimitMB: Int?
-    @State private var lyricBytes: Int64 = 0
     #endif
     @Environment(\.scenePhase) private var scenePhase
 
@@ -106,13 +108,15 @@ struct StorageSpaceView: View {
                 }
                 Button(role: .destructive) {
                     Task {
-                        await OfflineMetadataStore.shared.clearLyrics(excluding: downloadedTrackIDs)
-                        lyricBytes = OfflineMetadataStore.shared.lyricsBytes(excluding: downloadedTrackIDs)
+                        guard !isClearingLyrics else { return }
+                        isClearingLyrics = true
+                        defer { isClearingLyrics = false }
+                        await updateLyricCache(clear: true)
                     }
                 } label: {
                     Text("清除歌词缓存")
                 }
-                .disabled(lyricBytes == 0)
+                .disabled(lyricBytes == 0 || isClearingLyrics)
             } footer: {
                 Text("歌词随下载一起保存，清除后需要联网重新获取。")
                     .font(.caption)
@@ -162,8 +166,11 @@ struct StorageSpaceView: View {
         .task(id: scenePhase) {
             if scenePhase == .active, !model.isClearing {
                 await model.reload()
-                lyricBytes = OfflineMetadataStore.shared.lyricsBytes(excluding: downloadedTrackIDs)
             }
+        }
+        .task(id: account.offlineScope) {
+            lyricBytes = 0
+            await updateLyricCache()
         }
         #if os(macOS)
         .onChange(of: settings.audioCacheLimit) { _, _ in
@@ -181,8 +188,25 @@ struct StorageSpaceView: View {
         #endif
     }
 
-    /// 已下载的歌曲，其歌词归入下载，不在「歌词缓存」里统计或清除。
-    private var downloadedTrackIDs: Set<Int> { Set(DownloadManager.shared.offlineTracks.map(\.id)) }
+    private func updateLyricCache(clear: Bool = false) async {
+        guard let scope = account.offlineScope else { return }
+        do {
+            let stored = try await OfflineStore.shared.metadataTrackIDs()
+            guard scope == account.offlineScope, !Task.isCancelled else { return }
+            let pending = DownloadManager.shared.jobs.filter { $0.accountScope == scope && !$0.owners.isEmpty }
+            let protectedIDs = stored[scope, default: []].union(pending.map(\.track.id))
+            if clear {
+                try await OfflineMetadataStore.shared.clearLyrics(scope: scope, excluding: protectedIDs)
+            }
+            let bytes = await OfflineMetadataStore.shared.lyricsBytes(scope: scope, excluding: protectedIDs)
+            guard scope == account.offlineScope, !Task.isCancelled else { return }
+            lyricBytes = bytes
+        } catch {
+            if clear && scope == account.offlineScope {
+                ToastCenter.shared.show(String(localized: "歌词缓存清除失败"))
+            }
+        }
+    }
 
     private var busy: Bool { model.isLoading || model.isClearing }
     #if os(iOS)

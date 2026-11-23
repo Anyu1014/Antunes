@@ -68,11 +68,12 @@ public class MainActivity extends Activity {
     class Bridge{
         @JavascriptInterface public void call(String id,String operation,String raw){
             if(id.length()>100||raw.length()>2*1024*1024)return;
+            final long requestSession=operation.equals("request")?api.sessionEpoch():-1;
             network.execute(()->{try{
                 JSONObject a=new JSONObject(raw);Object result=new JSONObject();
                 switch(operation){
                     case "status":result=api.status();break;
-                    case "request":result=api.request(a.getString("path"),a.optJSONObject("payload")==null?new JSONObject():a.getJSONObject("payload"));break;
+                    case "request":result=api.request(a.getString("path"),a.optJSONObject("payload")==null?new JSONObject():a.getJSONObject("payload"),requestSession);break;
                     case "cookieLogin":result=api.cookieLogin(a.getString("cookie"));break;
                     case "logout":api.logout();break;
                     case "position":
@@ -83,9 +84,9 @@ public class MainActivity extends Activity {
                         else {android.content.SharedPreferences p=getSharedPreferences("player",MODE_PRIVATE);result=new JSONObject().put("queue",new JSONArray(p.getString("queue","[]"))).put("index",p.getInt("index",0)).put("mode",p.getString("mode","list")).put("playing",false).put("position",p.getInt("position",0)).put("duration",0);}
                         break;
                     case "control":ui.post(()->control(a));break;
-                    // 音质锁定极高：无论传什么都只写 exhigh。
+                    // 音质七档（与 MeloX 一致）：写进偏好，播放时按档位请求，
+                    // 拿不到会自动往下降。
                     case "quality":getSharedPreferences("player",MODE_PRIVATE).edit().putString("quality","exhigh").apply();break;
-                    // 下载音质同样锁定极高。
                     case "downloadQuality":getSharedPreferences("player",MODE_PRIVATE).edit().putString("download_quality","exhigh").apply();break;
                     case "eq":
                         JSONArray bands=a.getJSONArray("bands");if(bands.length()!=10)throw new Exception("音效参数无效");for(int n=0;n<10;n++)if(Math.abs(bands.getInt(n))>12)throw new Exception("音效参数无效");
@@ -168,7 +169,7 @@ public class MainActivity extends Activity {
     }
     synchronized JSONObject download(JSONObject track)throws Exception{
         long id=track.getLong("id");if(id<=0)throw new Exception("歌曲无效");
-        String url=api.audioURL(id,"exhigh");
+        String url=api.audioURL(id,getSharedPreferences("player",MODE_PRIVATE).getString("quality","exhigh"));
         File dir=new File(getFilesDir(),"audio");if(!dir.isDirectory()&&!dir.mkdirs())throw new IOException("下载目录创建失败");
         File tmp=new File(dir,id+".part");HttpURLConnection con=(HttpURLConnection)new URL(url).openConnection();con.setInstanceFollowRedirects(false);con.setConnectTimeout(15000);con.setReadTimeout(30000);
         try{

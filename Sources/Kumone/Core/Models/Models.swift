@@ -315,6 +315,7 @@ struct LyricResponse: Codable {
     let yrc: LyricBody?
     let ytlrc: LyricBody?
     let yromalrc: LyricBody?
+    /// 纯音乐标记：有它就不再找歌词行（与备用源码同一字段）。
     let lyricUser: LyricContributor?
     let transUser: LyricContributor?
     let nolyric: Bool?

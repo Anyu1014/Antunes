@@ -1,10 +1,23 @@
 export function escapeHTML(value) { return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-export function imageURL(value) { if (!value) return ''; try { const u = new URL(value); if (!['https:','http:'].includes(u.protocol)) return ''; u.protocol='https:'; u.searchParams.set('param','384y384'); return u.href; } catch { return ''; } }
+export function imageURL(value, size = 384) { if (!value) return ''; try { const u = new URL(value); if (!['https:','http:'].includes(u.protocol)) return ''; u.protocol='https:'; const n = Number(size) > 0 ? Math.round(Number(size)) : 384; u.searchParams.set('param', `${n}y${n}`); return u.href; } catch { return ''; } }
 export function track(raw) {
   const t = raw.simpleSong || raw.song || raw;
   return {id:Number(t.id),name:t.name||'未知歌曲',artist:t.artist||((t.ar||t.artists||[]).map(a=>a.name).join(' / ')),artists:t.ar||t.artists||[],album:t.al||t.album||{},cover:t.cover||(t.al||t.album||{}).picUrl||'',duration:Number(t.dt||t.duration||0),fee:Number(t.fee||0)};
 }
 export function uniqueTracks(items) { const seen=new Set(); return items.map(track).filter(t=>Number.isSafeInteger(t.id)&&t.id>0&&!seen.has(t.id)&&seen.add(t.id)); }
+// A partial detail response may omit the album altogether. Never reuse its
+// cover on a different song, or when the response names a changed album.
+export function preserveTrackCovers(incoming,previous) {
+  const known=new Map(previous.filter(Boolean).map(raw=>{const t=track(raw);return [t.id,t];}));
+  return incoming.map(item=>{
+    const now=track(item),old=known.get(now.id);
+    const album=Number(now.album?.id)||0,oldAlbum=Number(old?.album?.id)||0;
+    if(now.cover||!old?.cover||!oldAlbum||(album&&album!==oldAlbum))return item;
+    const raw=item.simpleSong||item.song||item;
+    const updated={...raw,al:album?now.album:old.album,cover:old.cover};
+    return item.simpleSong?{...item,simpleSong:updated}:item.song?{...item,song:updated}:updated;
+  });
+}
 export function time(ms) { const s=Math.floor(Math.max(0,Number(ms)||0)/1000);return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`; }
 export function count(n) { return n>=100000000?`${(n/100000000).toFixed(1)}亿`:n>=10000?`${(n/10000).toFixed(1)}万`:String(n||0); }
 export function parseLyrics(text) {

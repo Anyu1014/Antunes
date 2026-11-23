@@ -30,6 +30,7 @@ final class PlaylistContent: ObservableObject {
 
     init(playlistID: Int,
          snapshots: PlaylistSnapshotStore? = .shared,
+         preparesArtwork: Bool = false,
          accountScope: @escaping @MainActor () -> String? = { AccountStore.shared.offlineScope },
          detailLoader: @escaping (Int) async throws -> MusicAPI.PlaylistDetailResponse = { try await MusicAPI.playlistDetail(id: $0) },
          tracksLoader: @escaping ([Int]) async throws -> MusicAPI.SongDetailResponse = { try await MusicAPI.songDetails(ids: $0) }) {
@@ -41,10 +42,14 @@ final class PlaylistContent: ObservableObject {
         if let scope = accountScope(), let saved = snapshots?.cachedSnapshot(id: playlistID, scope: scope) {
             loadedScope = scope
             detail = saved.detail
-            tracks = saved.detail.tracks
-            orderedTracks = sortOrder.sorted(tracks)
             privileges = saved.privileges
-            isLoading = false
+            // iOS shows the header immediately. Rows wait for disk-only warming
+            // once the view knows which thumbnail size its layout uses.
+            if !preparesArtwork {
+                tracks = saved.detail.tracks
+                orderedTracks = sortOrder.sorted(tracks)
+                isLoading = false
+            }
         }
     }
 
@@ -61,7 +66,8 @@ final class PlaylistContent: ObservableObject {
         return orderedTracks.filter { TrackSearch.matches($0, query: query) }
     }
 
-    func load(allowNetwork: Bool = true, summary: PlaylistSummary? = nil, background: Bool = false) async {
+    func load(allowNetwork: Bool = true, summary: PlaylistSummary? = nil,
+              background: Bool = false, artworkSize: Int? = nil) async {
         loadGeneration += 1
         let generation = loadGeneration
         let scope = accountScope()
@@ -74,7 +80,7 @@ final class PlaylistContent: ObservableObject {
             loadedScope = scope
         }
         removedTrackIDs = []
-        isLoading = detail == nil
+        isLoading = detail == nil || (tracks.isEmpty && detail?.tracks.isEmpty == false)
         isLoadingMore = false
         isRefreshing = detail != nil
         errorMessage = nil
@@ -87,6 +93,10 @@ final class PlaylistContent: ObservableObject {
             guard valid(generation, scope: scope) else { return }
             if let saved {
                 let saved = applyingRecommendations(to: saved)
+                if let artworkSize {
+                    await warmLeadingArtwork(saved.detail.tracks, size: artworkSize)
+                    guard valid(generation, scope: scope) else { return }
+                }
                 if detail != saved.detail { detail = saved.detail }
                 if tracks != saved.detail.tracks { tracks = saved.detail.tracks }
                 if privileges != saved.privileges { privileges = saved.privileges }
@@ -128,10 +138,14 @@ final class PlaylistContent: ObservableObject {
                 loaded.trackIds.removeAll { removedTrackIDs.contains($0.id) }
                 loaded.trackCount = loaded.trackIds.count
             }
-            let known = Dictionary((tracks + loaded.tracks).map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
+            let known = Dictionary((tracks + loaded.tracks).map { ($0.id, $0) }, uniquingKeysWith: { old, new in new.preservingCover(from: old) })
             loaded.tracks = loaded.trackIds.compactMap { known[$0.id] }
-            if detail != loaded { detail = loaded }
             let loadedTracks = loaded.tracks.filter { !reducedRecommendationIDs.contains($0.id) }
+            if let artworkSize {
+                await warmLeadingArtwork(loadedTracks, size: artworkSize)
+                guard valid(generation, scope: scope) else { return }
+            }
+            if detail != loaded { detail = loaded }
             if tracks != loadedTracks { tracks = loadedTracks }
             let ids = Set(loaded.trackIds.map(\.id))
             merge(privileges: response.privileges, retaining: ids)
@@ -145,6 +159,12 @@ final class PlaylistContent: ObservableObject {
         }
     }
 
+    private func warmLeadingArtwork(_ tracks: [Track], size: Int) async {
+        let urls = sortOrder.sorted(tracks).prefix(12).compactMap { $0.album.picUrl?.resizedImageURL(size) }
+        let missing = urls.filter { ImageCache.shared.cachedImage(for: $0) == nil }
+        if !missing.isEmpty { await ImageCache.shared.warmDiskThumbnails(missing) }
+    }
+
     private func loadRemainingTracks(generation: Int, scope: String?, token: UUID?, background: Bool) async throws {
         guard let detail, tracks.count < detail.trackIds.count else { return }
         isLoadingMore = true
@@ -155,7 +175,7 @@ final class PlaylistContent: ObservableObject {
             guard await current(generation, scope: scope, token: token, background: background) else { return }
             let response = try await tracksLoader(chunk)
             guard await current(generation, scope: scope, token: token, background: background) else { return }
-            let known = Dictionary((tracks + response.songs).map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
+            let known = Dictionary((tracks + response.songs).map { ($0.id, $0) }, uniquingKeysWith: { old, new in new.preservingCover(from: old) })
             let updated = (self.detail?.trackIds ?? []).compactMap { known[$0.id] }
                 .filter { !reducedRecommendationIDs.contains($0.id) && !removedTrackIDs.contains($0.id) }
             if tracks != updated { tracks = updated }

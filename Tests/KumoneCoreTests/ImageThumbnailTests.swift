@@ -93,9 +93,7 @@ struct ImageThumbnailTests {
         #expect(try cgImage(#require(await cache.image(for: heroURL))).width == 768)
     }
 
-    /// Re-entering a playlist after the system trimmed the memory cache must
-    /// still have the cover on the first frame: the rendition is on disk.
-    @Test func diskCachedRenditionSeedsTheFirstFrameWithoutAMemoryHit() async throws {
+    @Test func aDiskRenditionEntersMemoryOnlyWhenWarmedOffTheViewPath() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let data = try largeCover()
@@ -103,10 +101,24 @@ struct ImageThumbnailTests {
         try seed(data, url: heroURL, root: root)
         // A fresh cache has nothing resident: only the disk file can answer.
         let cache = ImageCache(directory: root, offlineArtwork: { _ in nil })
-        let seeded = try #require(cache.cachedCover(for: heroURL))
-        #expect(try cgImage(seeded).width == 384)
-        // Having seeded memory, the view treats the visit as complete.
-        #expect(cache.cachedImage(for: heroURL) != nil)
+        #expect(cache.cachedPreview(for: heroURL) == nil)
+        await cache.warmDiskThumbnails([heroURL])
+        #expect(try cgImage(#require(cache.cachedPreview(for: heroURL))).width == 384)
+    }
+
+    @Test func aMissingCoverDoesNotEraseArtworkForTheSameAlbum() throws {
+        let decoder = JSONDecoder()
+        let cached = try decoder.decode(Track.self, from: Data(
+            #"{"id":1,"al":{"id":2,"picUrl":"https://example.test/cover.jpg"}}"#.utf8))
+        let partial = try decoder.decode(Track.self, from: Data(
+            #"{"id":1,"name":"New title","al":{"id":2}}"#.utf8))
+        let changedAlbum = try decoder.decode(Track.self, from: Data(
+            #"{"id":1,"al":{"id":3}}"#.utf8))
+
+        let merged = partial.preservingCover(from: cached)
+        #expect(merged.name == "New title")
+        #expect(merged.album.picUrl == cached.album.picUrl)
+        #expect(changedAlbum.preservingCover(from: cached).album.picUrl == nil)
     }
 
     private func largeCover(width: Int = 2_048, height: Int = 1_024) throws -> Data {

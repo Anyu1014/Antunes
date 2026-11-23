@@ -24,11 +24,15 @@ assert(view.includes('!model.isRefreshing && (model.isLoading || model.isLoading
 for(const size of [384,512])assert(view.includes(`CachedAsyncImage(url: detail.coverImgUrl?.resizedImageURL(${size}), animated: false)`));
 console.log('IOS_STATIC: cached refresh spinner suppressed; compact/tablet cover fade disabled; PASS');
 const imageCache=read('Sources/Kumone/Core/Storage/ImageCache.swift');
-assert(imageCache.includes('nonisolated func cachedPreview(for url: URL)'));
-assert(imageCache.includes('nonisolated func cachedCover(for url: URL)'));
-assert(imageCache.includes('Data(contentsOf: directory.appendingPathComponent(key))'));
-assert(imageCache.includes('let seeded = url.flatMap { ImageCache.shared.cachedCover(for: $0) }'));
-assert(imageCache.includes('imageState.image(for: url) ?? url.flatMap({ ImageCache.shared.cachedCover(for: $0) })'));
-assert(imageCache.includes('for size in Self.knownSizes'));
-assert(/let exactHit = ImageCache\.shared\.cachedImage\(for: url\)[\s\S]*?guard exactHit == nil else \{ return \}/.test(imageCache));
-console.log('IOS_STATIC: playlist cover seeds its first frame from any cached size; PASS');
+const preview = imageCache.split('nonisolated func cachedPreview(for url: URL)')[1]
+  ?.split('/// Sizes used by app surfaces')[0];
+assert(preview && !/Data\(contentsOf:|diskImage\(|Self\.preview\(|diagnostics\(/.test(preview),
+       'the synchronous preview must not do I/O or decode');
+assert(!imageCache.includes('cover-diag.log'));
+assert(model.includes('warmDiskThumbnails(missing)') && model.includes('cachedImage(for: $0) == nil'));
+assert(model.includes('new.preservingCover(from: old)'));
+assert(view.includes('preparesArtwork: true'));
+assert.match(init, /if !preparesArtwork \{\s*tracks = saved\.detail\.tracks/);
+assert.match(model, /if let artworkSize \{\s*await warmLeadingArtwork\(saved\.detail\.tracks/);
+assert(!view.includes('.task(id: model.tracks.count)'));
+console.log('IOS_STATIC: memory-only render path; bounded disk warming; cover survives partial refresh; PASS');

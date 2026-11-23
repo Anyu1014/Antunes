@@ -12,6 +12,13 @@ final class NowPlayingManager {
     private var artworkTask: Task<Void, Never>?
     private var playbackStateCancellables: Set<AnyCancellable> = []
     private var info: [String: Any] = [:]
+    /// The second text line of the system card. While lyrics are loaded it
+    /// carries the line being sung: that slot is the only lyric-shaped place
+    /// the system offers — `MPNowPlayingInfoCenter` has no lyric key — and it
+    /// falls back to the track's artists when there is nothing to sing.
+    private var artistLine = ""
+    private var lastSungLine = ""
+    private var lyricCancellables: Set<AnyCancellable> = []
     #if os(iOS)
     /// Binds the app's Now Playing state to its AVPlayer. The system's Now
     /// Playing / lock-screen / Dynamic Island surface launches the app behind
@@ -100,6 +107,40 @@ final class NowPlayingManager {
         }
         #endif
         registerRemoteCommands(for: player)
+        // A `@Published` property emits *before* it is written, so reading the
+        // cursor straight from this sink would paint the line that just ended:
+        // exactly one line behind the app. The main-queue hop reads the stored
+        // value instead, at the same moment the lyric view repaints.
+        player.lyricsCursor.$activeIndex
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.refreshSungLine() }
+            .store(in: &lyricCancellables)
+    }
+
+    /// The line being sung, or empty between lines and before the lyrics load.
+    private func sungLine() -> String {
+        guard let player, let lyrics = player.lyrics,
+              let index = player.lyricsCursor.activeIndex,
+              lyrics.lines.indices.contains(index) else { return "" }
+        return lyrics.lines[index].text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var subtitle: String {
+        lastSungLine.isEmpty ? artistLine : lastSungLine
+    }
+
+    /// Repaints the artist slot when the sung line changes. A line that is empty
+    /// (instrumental break, or the gap before the first syllable) keeps the
+    /// previous one rather than flickering back to the artist names.
+    private func refreshSungLine() {
+        push(line: sungLine())
+    }
+
+    private func push(line: String) {
+        if !line.isEmpty { lastSungLine = line }
+        guard !info.isEmpty, info[MPMediaItemPropertyArtist] as? String != subtitle else { return }
+        info[MPMediaItemPropertyArtist] = subtitle
+        infoCenter.nowPlayingInfo = info
     }
 
     /// Registers the remote commands on the current command center. Run again
@@ -227,9 +268,11 @@ final class NowPlayingManager {
         // be audible yet, so a refusal here is not held against the session.
         reclaimSessionIfNeeded(whilePlaying: false)
         #endif
+        artistLine = track.artistNames
+        lastSungLine = sungLine()
         info = [
             MPMediaItemPropertyTitle: track.name,
-            MPMediaItemPropertyArtist: track.artistNames,
+            MPMediaItemPropertyArtist: subtitle,
             MPMediaItemPropertyAlbumTitle: track.album.name,
             MPMediaItemPropertyPlaybackDuration: duration,
             MPNowPlayingInfoPropertyElapsedPlaybackTime: 0.0,
@@ -274,6 +317,8 @@ final class NowPlayingManager {
         artworkTask?.cancel()
         artworkTask = nil
         info = [:]
+        artistLine = ""
+        lastSungLine = ""
         infoCenter.nowPlayingInfo = nil
         infoCenter.playbackState = .stopped
         commandCenter.likeCommand.isActive = false

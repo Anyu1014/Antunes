@@ -547,11 +547,11 @@ final class DownloadManager: ObservableObject {
     @discardableResult
     func deleteLocalAudio(trackIDs: Set<Int>) async -> Bool {
         guard !trackIDs.isEmpty else { return true }
+        guard let scope = accountScope else { return false }
         let ids = Set(jobs.filter { trackIDs.contains($0.track.id) && !$0.owners.isEmpty }.map(\.id))
-        let deleted = await cancelJobs(ids, deletingTracks: trackIDs)
-        // 歌词跟着下载一起删除。
-        for id in trackIDs { OfflineMetadataStore.shared.removeLyrics(trackID: id) }
-        return deleted
+        guard await cancelJobs(ids, deletingTracks: trackIDs) else { return false }
+        await metadata.removeLyrics(trackIDs: trackIDs, scope: scope)
+        return true
     }
 
     func setNetwork(_ value: DownloadNetworkState) {

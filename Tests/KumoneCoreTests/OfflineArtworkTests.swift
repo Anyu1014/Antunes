@@ -238,6 +238,29 @@ struct OfflineArtworkTests {
         #expect(state.image(for: url) == nil)
     }
 
+    @Test @MainActor func playlistCoverRemainsVisibleDuringSameSongRefresh() {
+        let oldURL = cover.resizedImageURL(160)!
+        let newURL = "https://example.test/revised.jpg".resizedImageURL(160)!
+        let oldImage = NSImage(size: NSSize(width: 2, height: 2))
+        let newImage = NSImage(size: NSSize(width: 3, height: 3))
+        let owner = CachedImageState.Owner(trackID: 1, albumID: 2)
+        let first = CachedImageState.Request(url: oldURL, owner: owner)
+        let next = CachedImageState.Request(url: newURL, owner: owner)
+        let other = CachedImageState.Request(url: newURL, owner: .init(trackID: 1, albumID: 3))
+        var state = CachedImageState(url: oldURL, image: oldImage, owner: owner)
+
+        #expect(state.retainedImage(for: next) === oldImage)
+        state.begin(next, cached: nil)
+        #expect(state.retainedImage(for: next) === oldImage)
+        #expect(state.retainedImage(for: other) == nil)
+        state.finish(newImage, for: next)
+        state.finish(oldImage, for: first)
+        #expect(state.image(for: next) === newImage)
+        state.begin(other, cached: nil)
+        state.finish(newImage, for: next)
+        #expect(state.retainedImage(for: other) == nil)
+    }
+
     @Test @MainActor func reusedViewNeverShowsPreviousSongsPixels() {
         let noir = cover.resizedImageURL(128)!
         let kafu = "https://example.test/kafu.jpg".resizedImageURL(128)!

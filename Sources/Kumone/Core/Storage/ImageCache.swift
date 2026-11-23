@@ -9,10 +9,6 @@ actor ImageCache {
     typealias CachedImageHandler = @MainActor @Sendable (PlatformImage) -> Void
 
     private nonisolated(unsafe) let memory = NSCache<NSString, PlatformImage>()
-    /// Seeds that are deliberately not the exact rendition (a capped disk
-    /// decode or a smaller resident variant), so repeated body passes do not
-    /// re-read disk for them.
-    private nonisolated(unsafe) let seeds = NSCache<NSString, PlatformImage>()
     nonisolated let directory: URL
     private let session: URLSession
     private let offlineArtwork: @Sendable (URL) async -> Data?
@@ -36,8 +32,6 @@ actor ImageCache {
         memory.countLimit = 300
         #endif
         memory.totalCostLimit = 64 * 1024 * 1024
-        seeds.countLimit = 400
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }
 
     private static func loadOfflineArtwork(for url: URL) async -> Data? {
@@ -77,21 +71,27 @@ actor ImageCache {
             guard let (data, response) = try? await session.data(from: url),
                   (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true,
                   let image = Self.decode(data, for: url) else { return nil }
-            if generation == requestGeneration { try? data.write(to: fileURL, options: .atomic) }
+            if generation == requestGeneration {
+                if !FileManager.default.fileExists(atPath: directory.path) {
+                    try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                }
+                try? data.write(to: fileURL, options: .atomic)
+            }
             return image
         }
         inflight[key] = Request(generation: requestGeneration, task: task)
         let result = await task.value
         if inflight[key]?.generation == requestGeneration { inflight[key] = nil }
         if generation == requestGeneration, let result {
-            let width = result.size.width
-            let height = result.size.height
-            memory.setObject(result, forKey: memoryKey,
-                             cost: Int(width * height * 4))
+            remember(result, for: memoryKey)
         }
         // Do not store a smaller fallback under the requested size: a later
         // online request must still be able to fetch the full-resolution image.
         return result ?? cachedVariant(for: url)
+    }
+
+    private func remember(_ image: PlatformImage, for key: NSString) {
+        memory.setObject(image, forKey: key, cost: Int(image.size.width * image.size.height * 4))
     }
 
     private func diskImage(for key: String, requestedURL: URL) -> PlatformImage? {
@@ -158,8 +158,7 @@ actor ImageCache {
     }
 
     private func cachedVariant(for url: URL) -> PlatformImage? {
-        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              components.queryItems?.contains(where: { $0.name == "param" }) == true else { return nil }
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
         let otherItems = components.queryItems?.filter { $0.name != "param" } ?? []
         // Probe largest first without a disk scan.
         for size in [nil] + Self.knownSizes.map(Optional.some) {
@@ -188,7 +187,6 @@ actor ImageCache {
     func clear() throws {
         generation += 1
         memory.removeAllObjects()
-        seeds.removeAllObjects()
         if FileManager.default.fileExists(atPath: directory.path) {
             let info = try directory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
             guard info.isDirectory == true, info.isSymbolicLink != true else { throw OfflineAudioError.invalidResource }
@@ -205,15 +203,7 @@ actor ImageCache {
         memory.object(forKey: url.absoluteString as NSString)
     }
 
-    /// Synchronous in-memory lookup for *any* cached size of the same artwork.
-    ///
-    /// A list row caches a small variant (playlist rows use 80, the detail hero
-    /// asks for 384), so an exact-key lookup misses and the first frames would
-    /// draw the placeholder until the actor hands back the larger image — the
-    /// cover flash seen when pushing into a playlist. A resident thumbnail is
-    /// scaled in place; `cachedImage`/`image(for:)` still upgrade it to the
-    /// requested resolution right after, so this never becomes the final frame.
-    /// 同一个封面换一档尺寸的 URL（detail hero 用 384）；用于提前预取。
+    /// Builds a request for another thumbnail size of the same cover.
     nonisolated static func variant(of url: URL, size: Int) -> URL? {
         guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
         // 没有 `param` 的原始封面（列表里常见）同样要能换到目标尺寸，否则预取
@@ -223,69 +213,34 @@ actor ImageCache {
         return components.url
     }
 
-    /// 在列表里就把 detail 尺寸的图悄悄拉进来，进详情页时直接命中缓存。
-    nonisolated func prefetch(_ url: URL?) {
-        guard let url else { return }
-        Task.detached(priority: .utility) { _ = await ImageCache.shared.image(for: url) { _ in } }
+    func prefetch(_ url: URL?) async {
+        guard let url, !Task.isCancelled else { return }
+        _ = await image(for: url)
     }
 
+    /// Prime saved thumbnails for the first rows without waiting for the network.
+    func warmDiskThumbnails(_ urls: [URL]) {
+        var seen: Set<URL> = []
+        for url in urls {
+            guard !Task.isCancelled else { return }
+            let key = url.absoluteString as NSString
+            guard seen.insert(url).inserted, memory.object(forKey: key) == nil,
+                  let image = diskImage(for: Self.cacheKey(for: url), requestedURL: url) else { continue }
+            remember(image, for: key)
+        }
+    }
+
+    /// Rendering never reads disk, decodes an image, or writes diagnostics.
     nonisolated func cachedPreview(for url: URL) -> PlatformImage? {
         if let exact = cachedImage(for: url) { return exact }
-        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              components.queryItems?.contains(where: { $0.name == "param" }) == true else { return nil }
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
         let otherItems = components.queryItems?.filter { $0.name != "param" } ?? []
         for size in Self.knownSizes {
             components.queryItems = otherItems + [URLQueryItem(name: "param", value: "\(size)y\(size)")]
-            guard let candidate = components.url, candidate != url else { continue }
-            let resident = cachedImage(for: candidate)
-                ?? seeds.object(forKey: candidate.absoluteString as NSString)
-                ?? diskSeed(for: candidate)
-            if let image = resident, let preview = Self.preview(image, for: url) {
-                return preview
-            }
+            if let candidate = components.url, candidate != url,
+               let cached = cachedImage(for: candidate) { return cached }
         }
         return nil
-    }
-
-    /// 磁盘里的**任意尺寸**版本，做有界解码后塞进 `seeds`。
-    ///
-    /// 详情页要 384、列表行只存过 80/128、或者只存过 640 —— 只要磁盘上有同一张
-    /// 封面的某个尺寸，就足够在首帧顶上去，避免占位图闪一下。系统的内存缓存
-    /// 每次内存压力都会清空，只靠内存命中必然「隔一会儿再进又闪」。
-    private nonisolated func diskSeed(for candidate: URL) -> PlatformImage? {
-        let key = Self.cacheKey(for: candidate)
-        guard let data = try? Data(contentsOf: directory.appendingPathComponent(key)),
-              let decoded = Self.decode(data, for: candidate, cap: 512) else { return nil }
-        seeds.setObject(decoded, forKey: candidate.absoluteString as NSString)
-        return decoded
-    }
-
-    /// Synchronous seed that also reads the *disk* cache.
-    ///
-    /// Memory is trimmed by the system on every phone; the rendition a view
-    /// asks for is usually already on disk from an earlier visit. Reading and
-    /// decoding it here (ImageIO, size-capped) costs a few milliseconds once
-    /// per URL and removes the placeholder frame on every later visit — the
-    /// cover flash when re-entering a playlist. The decoded image is then
-    /// resident, so `image(for:)` treats the visit as already complete.
-    nonisolated func cachedCover(for url: URL) -> PlatformImage? {
-        if let resident = cachedImage(for: url) { return resident }
-        if let seed = seeds.object(forKey: url.absoluteString as NSString) { return seed }
-        if let variant = cachedPreview(for: url) { return variant }
-        let key = Self.cacheKey(for: url)
-        // Bounded decode: a 1024 rendition still seeds, but nothing expensive
-        // runs on the main thread; the exact size arrives from the actor.
-        guard let data = try? Data(contentsOf: directory.appendingPathComponent(key)),
-              let decoded = Self.decode(data, for: url, cap: 512) else { return nil }
-        // A capped seed must not count as the exact rendition, or the actor
-        // would treat the visit as complete and never sharpen it.
-        if (Self.thumbnailLimit(for: url) ?? 0) <= 512 {
-            memory.setObject(decoded, forKey: url.absoluteString as NSString,
-                             cost: Int(decoded.size.width * decoded.size.height * 4))
-        } else {
-            seeds.setObject(decoded, forKey: url.absoluteString as NSString)
-        }
-        return decoded
     }
 
     /// Sizes used by app surfaces, including existing on-disk caches from
@@ -298,25 +253,57 @@ actor ImageCache {
     }
 }
 
-/// Keep pixels bound to their source, even while SwiftUI reuses a view for a
-/// different URL or a cancelled request finishes after the next one starts.
+/// Keep pixels bound to their source. Playlist rows may explicitly keep the
+/// previous pixels until the same song and album have a new image to display.
 struct CachedImageState {
-    private(set) var url: URL?
-    private var image: PlatformImage?
+    struct Owner: Hashable {
+        let trackID: Int
+        let albumID: Int
+    }
 
-    init(url: URL? = nil, image: PlatformImage? = nil) {
-        self.url = url
+    struct Request: Hashable {
+        let url: URL?
+        let owner: Owner?
+    }
+
+    private var request: Request
+    private var image: PlatformImage?
+    private var previousImage: PlatformImage?
+
+    init(url: URL? = nil, image: PlatformImage? = nil, owner: Owner? = nil) {
+        self.request = Request(url: url, owner: owner)
         self.image = image
     }
 
     func image(for url: URL?) -> PlatformImage? {
-        guard let url, self.url == url else { return nil }
+        image(for: Request(url: url, owner: nil))
+    }
+
+    func image(for request: Request) -> PlatformImage? {
+        guard request.url != nil, self.request == request else { return nil }
         return image
     }
 
+    func retainedImage(for next: Request) -> PlatformImage? {
+        guard next.url != nil, let owner = next.owner, request.owner == owner else { return nil }
+        return image ?? previousImage
+    }
+
+    mutating func begin(_ next: Request, cached: PlatformImage?) {
+        if request == next { return }
+        let previous = retainedImage(for: next)
+        self = CachedImageState(url: next.url, image: cached, owner: next.owner)
+        if cached == nil { previousImage = previous }
+    }
+
     mutating func finish(_ image: PlatformImage?, for url: URL) {
-        guard self.url == url else { return }
+        finish(image, for: Request(url: url, owner: nil))
+    }
+
+    mutating func finish(_ image: PlatformImage?, for request: Request) {
+        guard self.request == request else { return }
         self.image = image
+        if image != nil { previousImage = nil }
     }
 }
 
@@ -324,37 +311,43 @@ struct CachedImageState {
 struct CachedAsyncImage<Placeholder: View>: View {
     let url: URL?
     var animated: Bool = true
+    let owner: CachedImageState.Owner?
     @ViewBuilder var placeholder: () -> Placeholder
 
     @State private var imageState: CachedImageState
 
-    init(url: URL?, animated: Bool = true,
+    init(url: URL?, animated: Bool = true, owner: CachedImageState.Owner? = nil,
          @ViewBuilder placeholder: @escaping () -> Placeholder) {
         self.url = url
         self.animated = animated
+        self.owner = owner
         self.placeholder = placeholder
         // Seed from the in-memory cache so a re-created view (e.g. the iOS 26
         // tab-bar accessory rebuilt on a tab switch, #46, or a playlist hero
         // that asks for a larger size than its list row cached) shows
         // already-decoded artwork immediately instead of flashing the
         // placeholder for the frames it takes to reach the cache actor.
-        let seeded = url.flatMap { ImageCache.shared.cachedCover(for: $0) }
-        _imageState = State(initialValue: CachedImageState(url: url, image: seeded))
+        let seeded = url.flatMap { ImageCache.shared.cachedPreview(for: $0) }
+        _imageState = State(initialValue: CachedImageState(url: url, image: seeded, owner: owner))
     }
 
     var body: some View {
+        let request = CachedImageState.Request(url: url, owner: owner)
         ZStack {
             placeholder()
             // A reused row keeps its State. Resolve an already decoded cover
             // synchronously when the URL changes, before the new task runs.
-            if let image = imageState.image(for: url) ?? url.flatMap({ ImageCache.shared.cachedCover(for: $0) }) {
+            if let image = imageState.image(for: request)
+                ?? url.flatMap({ ImageCache.shared.cachedPreview(for: $0) })
+                ?? imageState.retainedImage(for: request) {
                 Image(platformImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
                     .transition(animated ? .opacity.animation(.easeIn(duration: 0.22)) : .identity)
             }
         }
-        .task(id: url) {
+        .task(id: request) {
+            guard !Task.isCancelled else { return }
             guard let url else {
                 imageState = CachedImageState()
                 return
@@ -363,16 +356,17 @@ struct CachedAsyncImage<Placeholder: View>: View {
             // A cached variant is only a stand-in: it is shown at once and the
             // exact size still replaces it below.
             let exactHit = ImageCache.shared.cachedImage(for: url)
-            if imageState.url != url || exactHit != nil {
-                imageState = CachedImageState(url: url, image: exactHit ?? ImageCache.shared.cachedCover(for: url))
+            imageState.begin(request, cached: exactHit ?? ImageCache.shared.cachedPreview(for: url))
+            if let exactHit {
+                if imageState.image(for: request) !== exactHit { imageState.finish(exactHit, for: request) }
+                return
             }
-            guard exactHit == nil else { return }
             let cached = await ImageCache.shared.image(for: url) { preview in
                 guard !Task.isCancelled else { return }
-                imageState.finish(preview, for: url)
+                if imageState.image(for: request) == nil { imageState.finish(preview, for: request) }
             }
             guard !Task.isCancelled, let cached else { return }
-            imageState.finish(cached, for: url)
+            imageState.finish(cached, for: request)
         }
     }
 }
