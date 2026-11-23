@@ -62,9 +62,20 @@ build_ios() {
   echo "IPA: $LATEST/Antunes-$VERSION.ipa"
 }
 
+# 发布快照：把本版安装包同步进 git 仓库的 dist/（分支里带上安装包，见 ~/.dsh/AGENTS.md）
+sync_dist() {
+  local version; version="$(sed -n 's/^MARKETING_VERSION = //p' "$SRC/ios/Config/Shared.xcconfig" | tr -d '[:space:]')"
+  mkdir -p "$SRC/dist"
+  local f
+  for f in "$LATEST"/Antunes-"$version".apk "$LATEST"/Antunes-"$version".ipa; do
+    [ -f "$f" ] && cp -f "$f" "$SRC/dist/" && echo "DIST: $SRC/dist/$(basename "$f")"
+  done
+  [ -d "$SRC/dist" ] && echo "提示：dist/ 里的安装包需要随源码一起提交到同版本名分支（脚本不自动提交）。"
+}
+
 case "${1:-all}" in
-  android) build_android ;;
-  ios) build_ios ;;
-  all) build_android; build_ios ;;
-  *) echo "用法：$0 [android|ios|all|clean]" >&2; exit 1 ;;
+  android) build_android; sync_dist ;;
+  ios) build_ios; sync_dist ;;
+  all) build_android; build_ios; sync_dist ;;
+  *) echo "用法：$0 [android|ios|all]" >&2; exit 1 ;;
 esac
