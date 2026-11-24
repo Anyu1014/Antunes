@@ -470,6 +470,10 @@ function card(item,kind='playlist'){
 // 「根据你听过的热门节目推荐」（电台）不展示。
 const HOME_SLOTS=['recommendedPlaylists','recentlyTrending','tailoredRecommendation','charts','personalPlaylists','radarPlaylists','regionalHits','likedSongRoaming','likedSongRecommendations'];
 const HOME_SLOT_TITLES={recommendedPlaylists:'推荐歌单',recentlyTrending:'近期云村热播',tailoredRecommendation:'根据你的口味为你推荐',charts:'排行榜',personalPlaylists:'你的歌单',radarPlaylists:'雷达歌单',regionalHits:'最近的热门歌曲',likedSongRoaming:'从你喜欢的歌开始漫游',likedSongRecommendations:'根据你喜爱的歌曲推荐'};
+const HOME_CARD_TITLES={daily:'每日推荐',privateFM:'私人漫游',heartbeat:'心动模式'};
+const HOME_EXTRA_TITLES={newAlbums:'新碟上架',topArtists:'推荐歌手'};
+const homeSectionKey=slot=>'home.section.'+slot;
+const homeSectionEnabled=slot=>prefs[homeSectionKey(slot)]!==false;
 function homeSlot(block){
   const code=String(block.blockCode||'').toUpperCase();
   const title=String(block.uiElement?.subTitle?.title||block.uiElement?.mainTitle?.title||'').trim();
@@ -618,7 +622,13 @@ async function homePage(ticket,session){
 }
 function homeHTML(sections,values,signedIn){
   let html=header('推荐',round('search',()=>switchTab('search'),'搜索','search-button glass'));
-  let left=signedIn?`<section class="section"><div class="shelf feature-shelf">${[['每日推荐','每天 30 首，发现好音乐','calendar',()=>navigate({kind:'daily'})],['私人漫游','根据你的口味漫游好音乐','fm',()=>switchTab('fm')],['心动模式','从喜欢的歌开始','heart',startHeart]].map(([title,sub,name,fn])=>button(`${icon(name)}<strong>${title}</strong><small>${sub}</small>`,fn,'feature')).join('')}</div></section>`:'';
+  const cards=signedIn?[
+    ['daily','每天 30 首，发现好音乐','calendar',()=>navigate({kind:'daily'})],
+    ['privateFM','根据你的口味漫游好音乐','fm',()=>switchTab('fm')],
+    ['heartbeat','从喜欢的歌开始','heart',startHeart],
+  ].filter(([slot])=>homeSectionEnabled(slot)):[];
+  let left=cards.length?`<section class="section"><div class="shelf feature-shelf">${cards.map(([slot,sub,name,fn])=>button(`${icon(name)}<strong>${HOME_CARD_TITLES[slot]}</strong><small>${sub}</small>`,fn,'feature')).join('')}</div></section>`:'';
+  sections=sections.filter(({slot})=>homeSectionEnabled(slot));
   let right='';
   if(sections.length){
     // 竖屏单列：按板块顺序直接排（CSS 下 .home-cols/.home-col 是 display:contents，
@@ -632,8 +642,8 @@ function homeHTML(sections,values,signedIn){
     }
   }
   // 新碟上架 / 推荐歌手：不在参考实现的九板块里，本项目保留，固定在九板块之后。
-  right+=shelf('新碟上架',values[2]?.albums||[],'album');
-  right+=shelf('推荐歌手',(values[3]?.list?.artists||values[3]?.artists||[]).slice(0,6),'artist');
+  if(homeSectionEnabled('newAlbums'))right+=shelf(HOME_EXTRA_TITLES.newAlbums,values[2]?.albums||[],'album');
+  if(homeSectionEnabled('topArtists'))right+=shelf(HOME_EXTRA_TITLES.topArtists,(values[3]?.list?.artists||values[3]?.artists||[]).slice(0,6),'artist');
   if(!signedIn)left+='<p class="home-login-hint">部分功能需登录后完全显示。</p>';
   html+=`<div class="home-cols"><div class="home-col">${left}</div><div class="home-col">${right}</div></div>`;
   return html;
@@ -774,6 +784,8 @@ async function loadAccount(){
   if(results[0].status==='fulfilled')playlists=results[0].value.playlist||[];
   if(results[1].status==='fulfilled')liked=new Set(results[1].value.ids||[]);
 }
+const profileBioKey=userID=>'customProfileBio.'+userID;
+const customProfileBio=userID=>prefs[profileBioKey(userID)]||'';
 // “我的音乐”那一组：顺序与开关与设置里的“我的音乐板块”共用同一批 prefs 键
 const LIBRARY_ROWS=[['liked','我喜欢的音乐','heartFill','libLiked','accent-row'],['daily','每日推荐','calendarFill','libDaily',''],['recents','最近播放','clockFill','libRecents',''],['rank','听歌排行','eq','libRank',''],['collections','我的收藏','starFill','libCollections',''],['downloads','我的下载','downloadFill','libDownloads',''],['cloud','音乐云盘','cloudFill','libCloud','']];
 function libraryOrderedRows(){
@@ -787,7 +799,7 @@ async function libraryPage(){
   // 私信入口排在搜索左边，和 iOS 端顶栏两个按钮的顺序一致。
   const messageButton=round('chat',()=>navigate({kind:'messages'}),'私信');
   let html=header('我的',messageButton+searchButton+round('gear',()=>openSettings(),'设置'));
-  const profile=`<div class="group">${loggedIn&&account?`<div class="list-row profile-row">${account.avatarUrl?cover(account.avatarUrl,'avatar'):`<span class="avatar">${icon('user')}</span>`}<span><strong>${e(account.nickname)}</strong><small>${e(account.signature||'Antunes，随心而听')}</small></span></div>`:button(`<span class="avatar">${icon('user')}</span><span><strong>登录</strong><small>同步我喜欢的音乐、歌单与每日推荐</small></span>${icon('chevron','chevron')}`,()=>openLogin(),'list-row profile-row')}</div>`;
+  const profile=`<div class="group">${loggedIn&&account?`<div class="list-row profile-row">${account.avatarUrl?cover(account.avatarUrl,'avatar'):`<span class="avatar">${icon('user')}</span>`}<span class="list-label"><strong>${e(account.nickname)}</strong><small>${e(customProfileBio(accountOwner())||account.signature||'Antunes，随心而听')}</small></span></div>`:button(`<span class="avatar">${icon('user')}</span><span><strong>登录</strong><small>同步我喜欢的音乐、歌单与每日推荐</small></span>${icon('chevron','chevron')}`,()=>openLogin(),'list-row profile-row')}</div>`;
   if(!loggedIn)return html+profile;
   const likedPlaylist=playlists.find(x=>x.specialType===5)||playlists.find(x=>x.creator?.userId===account?.userId);
   const own=playlists.filter(x=>x.creator?.userId===account?.userId&&(prefs.showLikedInCreated===true||x.specialType!==5)),sub=playlists.filter(x=>x.creator?.userId!==account?.userId);
@@ -1007,7 +1019,7 @@ function setupSearch(){
 function showOverlay(kind,body,{title='',compact=false,raw=false,replace=false}={}){
   if(overlayKind&&!replace)overlayHistory.push({kind:overlayKind,html:$('#overlay').innerHTML});
   clearTimeout(overlayTimer);overlayKind=kind;
-  $('#overlay').innerHTML=raw?body:`<div class="scrim" ${bind(()=>closeOverlay())}></div><section class="sheet ${compact?'compact-sheet':''}${kind==='settings'?' settings-sheet':''}${kind==='comments'?' comments-sheet':''}${kind==='login'?' login-sheet':''}${kind==='storage'?' storage-sheet':''}" role="dialog" aria-modal="true" aria-label="${e(title)}"><div class="drag"></div><div class="sheet-header"><h2>${e(title)}</h2>${button('完成',()=>closeOverlay())}</div><div class="sheet-body">${body}</div></section>`;
+  $('#overlay').innerHTML=raw?body:`<div class="scrim" ${bind(()=>closeOverlay())}></div><section class="sheet ${compact?'compact-sheet':''}${kind==='settings'?' settings-sheet':''}${kind==='comments'?' comments-sheet':''}${kind==='login'?' login-sheet':''}${kind==='storage'?' storage-sheet':''}${kind==='playlistPicker'?' playlist-picker-sheet':''}" role="dialog" aria-modal="true" aria-label="${e(title)}"><div class="drag"></div><div class="sheet-header"><h2>${e(title)}</h2>${button('完成',()=>closeOverlay())}</div><div class="sheet-body">${body}</div></section>`;
 }
 function closeOverlay(all=false){closePopover();closeComments();const wasSettings=overlayKind==='settings';clearTimeout(overlayTimer);const prev=all?null:overlayHistory.pop();if(all)overlayHistory=[];if(prev){overlayKind=prev.kind;$('#overlay').innerHTML=prev.html;if(overlayKind==='nowPlaying')updateNowPlaying(true);}else{overlayKind='';$('#overlay').innerHTML='';overlayHistory=[];}
   fmLyricKey='';
@@ -1048,6 +1060,17 @@ function placePopover(anchor){
   card.style.left=`${left}px`;card.style.top=`${top}px`;
 }
 function formSheet(title,body,submitLabel,onSubmit){showOverlay('form',`<form id="sheet-form" class="login">${body}<p id="form-error" class="status-error"></p><button class="primary" type="submit">${e(submitLabel)}</button></form>`,{title});$('#sheet-form').addEventListener('submit',async ev=>{ev.preventDefault();const submit=$('#sheet-form button[type=submit]');submit.disabled=true;try{await onSubmit(new FormData(ev.currentTarget));}catch(err){if($('#form-error'))$('#form-error').textContent=err.message;else errorToast(err);}finally{if(submit?.isConnected)submit.disabled=false;}});}
+function openCustomProfileBio(){
+  const owner=accountOwner(),session=sessionGeneration;
+  if(!owner)return;
+  formSheet('自定义个人简介',`<label class="field"><input name="bio" aria-label="自定义个人简介" placeholder="留空使用网易云音乐简介" value="${e(customProfileBio(owner))}"></label><p class="notice">仅修改本机显示，不会更新网易云音乐上的简介。</p>`,'保存',values=>{
+    if(session!==sessionGeneration||accountOwner()!==owner)throw new Error('账号已切换，请重新打开设置');
+    const bio=String(values.get('bio')||'').trim(),key=profileBioKey(owner);
+    if(bio)prefs[key]=bio;else delete prefs[key];
+    write('preferences',prefs);
+    closeOverlay();
+  });
+}
 function confirmAction(title,text,fn){showOverlay('confirm',`<div class="login"><p>${e(text)}</p>${button('确认',async()=>{await fn();closeOverlay();},'primary danger')}${button('取消',()=>closeOverlay(),'muted-button')}</div>`,{title,compact:true});}
 function newPlaylist(){if(!loggedIn){openLogin();return;}formSheet('新建歌单','<label class="field"><span>名称</span><input name="name" maxlength="100" required placeholder="歌单名称"></label><label class="list-row"><span>私密歌单</span><input class="toggle" name="private" type="checkbox"></label>','创建',async values=>{const name=String(values.get('name')||'').trim();if(!name)throw new Error('请输入歌单名称');await api('/playlist/create',{name,privacy:values.has('private')?10:0,type:'NORMAL'});await loadAccount();closeOverlay();toast('歌单已创建');if(route.kind==='library')render();});}
 function setupCommentsDrag(layer){
@@ -1112,16 +1135,72 @@ function trackMenu(t,index){
   menu(t.name,items);
 }
 function addPickedToPlaylist(tracks){
-  if(!loggedIn){openLogin();return;}
   if(!tracks.length){toast('先选几首');return;}
-  const own=playlists.filter(x=>x.creator?.userId===account?.userId);
-  if(!own.length){newPlaylist();return;}
-  showOverlay('playlistPicker',own.map(p=>button(`${cover(p.coverImgUrl,'playlist-thumb')}<span class="list-label"><strong>${e(p.name)}</strong><small>${p.trackCount||0} 首</small></span>`,async()=>{
-    try{await api('/playlist/manipulate/tracks',{op:'add',pid:p.id,trackIds:JSON.stringify(tracks.map(t=>t.id)),imme:'true'});toast(`已添加 ${tracks.length} 首到「${p.name}」`);selecting=false;picked.clear();closeOverlay(true);cache.clear();await loadAccount();render();}
-    catch(err){errorToast(err);}
-  },'list-row pick-playlist')),{title:`添加到歌单（${tracks.length} 首）`});
+  showPlaylistPicker(tracks,true);
 }
-function addToPlaylist(t){if(!loggedIn){openLogin();return;}const own=playlists.filter(x=>x.creator?.userId===account?.userId);showOverlay('playlistPicker',own.length?own.map(p=>button(`${cover(p.coverImgUrl,'playlist-thumb')}<span class="list-label"><strong>${e(p.name)}</strong><small>${p.trackCount||0} 首</small></span>`,async()=>{try{await api('/playlist/manipulate/tracks',{op:'add',pid:p.id,trackIds:JSON.stringify([t.id]),imme:'true'});toast('已添加到歌单');closeOverlay();}catch(err){errorToast(err);}},'list-row')).join(''):empty('还没有歌单','先创建一个歌单','music',button('新建歌单',newPlaylist,'primary')),{title:'添加到歌单'});}
+function addToPlaylist(track){showPlaylistPicker([track]);}
+function showPlaylistPicker(tracks,batch=false){
+  if(!loggedIn){openLogin();return;}
+  const owner=accountOwner(),session=sessionGeneration;
+  if(!owner){toast('账号资料尚未就绪，请稍后重试');return;}
+  const trackIds=JSON.stringify(tracks.map(t=>t.id));
+  const own=playlists.filter(p=>Number(p.creator?.userId)===owner);
+  const rows=own.map(p=>button(
+    `${cover(p.coverImgUrl,'playlist-thumb')}<span class="list-label"><strong>${e(p.name)}</strong><small>${p.trackCount||0} 首</small></span>`,
+    ()=>save(p),'list-row pick-playlist')).join('');
+  showOverlay('playlistPicker',`<div class="playlist-picker-list">${rows||empty('还没有歌单','可在下方创建并添加歌曲','music')}</div>
+    <form class="playlist-picker-create">
+      <input class="search-input" name="name" type="text" maxlength="100" placeholder="新建歌单" aria-label="新建歌单名称">
+      <button class="accent" type="submit" disabled>创建并收藏</button>
+      <p class="status-error" role="status" hidden></p>
+    </form>`,{title:batch?`添加到歌单（${tracks.length} 首）`:'添加到歌单'});
+  const form=$('.playlist-picker-create'), field=form.elements.name, submit=form.querySelector('button');
+  const status=form.querySelector('[role=status]'), choices=[...$('.playlist-picker-list').querySelectorAll('button')];
+  let busy=false,created=null;
+  const sameAccount=()=>session===sessionGeneration&&owner===accountOwner();
+  const active=()=>sameAccount()&&overlayKind==='playlistPicker'&&form.isConnected;
+  function update(){
+    field.disabled=busy||created!==null;
+    submit.disabled=busy||(!created&&!field.value.trim());
+    for(const choice of choices)choice.disabled=busy;
+  }
+  field.addEventListener('input',update);
+  form.addEventListener('submit',ev=>{ev.preventDefault();void save(null);});
+  async function save(target){
+    if(busy||!active()||(!target&&!created&&!field.value.trim()))return;
+    busy=true;status.hidden=true;update();
+    try{
+      if(!target&&!created){
+        const name=field.value.trim();
+        const result=await api('/playlist/create',{name,privacy:0,type:'NORMAL'});
+        const id=Number(result?.id??result?.playlist?.id);
+        if(!Number.isSafeInteger(id)||id<=0)throw new Error('服务端未返回新歌单编号，请先到「我的」确认');
+        created={id,name};
+      }
+      if(!active())return;
+      const playlist=target||created;
+      await api('/playlist/manipulate/tracks',{op:'add',pid:playlist.id,trackIds,imme:'true'});
+      if(!sameAccount())return;
+      cache.delete('playlist-'+playlist.id);
+      if(active()){
+        toast(batch?`已添加 ${tracks.length} 首到「${playlist.name}」`:'已添加到歌单');
+        if(batch){selecting=false;picked.clear();}
+        closeOverlay(batch);
+        if(batch||route.kind==='playlist'&&route.id===playlist.id)render();
+      }
+      void loadAccount().then(()=>{if(sameAccount()&&route.kind==='library')render();}).catch(()=>{});
+    }catch(err){
+      if(active()){
+        status.hidden=false;
+        status.textContent=!target&&created?`歌单已创建，添加失败：${err.message}。可重试添加。`:err.message;
+        if(!target&&created)submit.textContent='重试添加';
+      }
+    }finally{
+      busy=false;
+      if(active())update();
+    }
+  }
+}
 function sizeText(bytes){if(!bytes)return '0 KB';if(bytes>=1024*1024*1024)return (bytes/1024/1024/1024).toFixed(2)+' GB';if(bytes>=1024*1024)return (bytes/1024/1024).toFixed(1)+' MB';return Math.max(1,Math.round(bytes/1024))+' KB';}
 async function fetchLyricPayload(id){
   try{return await api('/song/lyric/v1',{id,cp:false,lv:0,kv:0,tv:0,rv:0,yv:0,ytv:0,yrv:0});}
@@ -1174,7 +1253,7 @@ function selectRow(label,key,items,onChange){
   return button(`<span>${e(label)}</span><span class="row-value">${e(shown)}</span>${icon('chevron')}`,open,'list-row select-row',e(label));
 }
 function bindChange(fn){return `data-change="${bind(fn).match(/"(\d+)"/)[1]}"`;}
-function toggleRow(label,key,after){return `<label class="list-row"><span>${e(label)}</span><input class="toggle" type="checkbox" aria-label="${e(label)}" ${prefs[key]?'checked':''} ${bindChange(ev=>{prefs[key]=ev.target.checked;savePrefs();if(after)after();})}></label>`;}
+function toggleRow(label,key,after,defaultValue=false){return `<label class="list-row"><span>${e(label)}</span><input class="toggle" type="checkbox" aria-label="${e(label)}" ${(prefs[key]??defaultValue)?'checked':''} ${bindChange(ev=>{prefs[key]=ev.target.checked;savePrefs();if(after)after();})}></label>`;}
 // 设置里的顺序必须与底栏从左到右一致：直接复用 navigationTabs 的排序结果
 const SECTION_DEFS=[['home','推荐','showHome'],['explore','精选','showExplore'],['fm','漫游','showFM'],['library','我的','showLibrary'],['search','搜索','showSearch']];
 // 三个点：点开是「移到顶部 / 上移 / 下移 / 移到底部」，不再用手势拖动。
@@ -1234,24 +1313,34 @@ function openSettingsReplace(){showOverlay('settings',settingsHTML(),{title:'设
 function refreshSettings(){
   const body=overlayKind==='settings'?document.querySelector('#overlay .sheet-body'):null;
   if(!body)return openSettingsReplace();
-  body.innerHTML=settingsHTML();
+  const expanded=new Set([...body.querySelectorAll('details[data-section-group][open]')].map(node=>node.dataset.sectionGroup));
+  body.innerHTML=settingsHTML(expanded);
 }
 function ambientIntensityRow(){
   const percent=Math.round(Math.min(1.5,Math.max(0.5,Number(prefs.ambientIntensity)||1))*100);
   return `<label class="list-row slider-row"><span>背景色强度</span><input type="range" aria-label="背景色强度" min="50" max="150" step="10" value="${percent}" ${bindChange(ev=>{prefs.ambientIntensity=Number(ev.target.value)/100;write('preferences',prefs);const out=document.getElementById('ambient-intensity');if(out)out.textContent=Math.round(prefs.ambientIntensity*100)+'%';refreshAmbient();})}><output id="ambient-intensity">${percent}%</output></label><div class="slider-scale"><span>50%</span><span>150%</span></div>`;
 }
-function settingsHTML(){
+function settingsHTML(expanded=new Set()){
   // 音质七档（与备用源码 MeloX 一致）：选到的档位拿不到时自动往下降。
   let html=`<div class="group-label">播放</div><div class="group">${listRow('音质','eq',()=>toast('当前固定为极高音质'),'<span class="row-value">极高</span>')}${listRow('音效','eq',openEQ)}${listRow('睡眠定时','clock',openSleep)}</div>`;
-  html+=`<div class="group-label">启动</div><div class="group">${selectRow('冷启动板块','startTab',[['auto','自动（第一个板块）'],['home','推荐'],['explore','精选'],['fm','漫游'],['library','我的'],['search','搜索']])}</div><div class="group-label">主页板块</div>${sectionRows()}<p class="group-note">只留一项时底栏直接显示该板块图标，两项及以上折叠为头像。「我的」只能在其它四个板块全部关闭后关闭；全部关闭时默认显示「我的」。</p><div class="group-label">我的音乐板块</div>${librarySectionRows()}<p class="group-note">长按右侧三横线可上下拖动排序（顺序即“我的”页里从上到下）；关掉的项不再出现在“我的”页。</p><div class="group-label">主页歌单展示</div><div class="group">${toggleRow('创建的歌单','libCreatedLists',()=>{if(route.kind==='library')render();})}${toggleRow('收藏的歌单','libCollectedLists',()=>{if(route.kind==='library')render();})}${toggleRow('我喜欢的音乐显示在创建的歌单','showLikedInCreated',()=>{if(route.kind==='library')render();})}</div>`;
+  html+=`<div class="group-label">启动</div><div class="group">${selectRow('冷启动板块','startTab',[['auto','自动（第一个板块）'],['home','推荐'],['explore','精选'],['fm','漫游'],['library','我的'],['search','搜索']])}</div>`;
+  const sectionGroup=(title,content,note='')=>`<details data-section-group="${title}"${expanded.has(title)?' open':''}><summary>${title}</summary>${content}${note?`<p class="group-note">${note}</p>`:''}</details>`;
+  const recommendationRows=[...Object.entries(HOME_CARD_TITLES),...HOME_SLOTS.map(slot=>[slot,HOME_SLOT_TITLES[slot]]),...Object.entries(HOME_EXTRA_TITLES)]
+    .map(([slot,title])=>toggleRow(title,homeSectionKey(slot),()=>{if(route.kind==='home')render();},true)).join('');
+  html+=`<div class="group-label">板块管理</div><div class="group section-management">
+    ${sectionGroup('主页板块',sectionRows(),'只留一项时底栏直接显示该板块图标，两项及以上折叠为头像。「我的」只能在其它四个板块全部关闭后关闭；全部关闭时默认显示「我的」。')}
+    ${sectionGroup('我的音乐板块',librarySectionRows(),'点右侧三个点可调整“我的”页里的顺序；关掉的项不再显示。')}
+    ${sectionGroup('主页歌单展示',`<div class="group">${toggleRow('创建的歌单','libCreatedLists',()=>{if(route.kind==='library')render();})}${toggleRow('收藏的歌单','libCollectedLists',()=>{if(route.kind==='library')render();})}${toggleRow('我喜欢的音乐显示在创建的歌单','showLikedInCreated',()=>{if(route.kind==='library')render();})}</div>`)}
+    ${sectionGroup('推荐页板块',`<div class="group">${recommendationRows}</div>`)}
+    </div>`;
   html+=`<div class="group-label">玻璃</div><div class="group">${selectRow('玻璃样式','glassStyle',[['native','原生磨砂'],['frost','高透磨砂'],['clear','清透玻璃'],['off','关闭']],applyTheme)}</div>`;
   html+=`<div class="group-label">外观</div><div class="group">${selectRow('主题','appearance',[['system','跟随系统'],['light','浅色'],['dark','深色']])}${toggleRow('底栏歌词','lyricBar',()=>{lyricsBar=prefs.lyricBar;if(!lyricsBar)tabsExpanded=false;renderChrome();})}${selectRow('歌词对齐','lyricAlignMode',[['left','居左'],['center','居中'],['right','居右']],()=>{chromeKey='';renderChrome();})}${toggleRow('底栏文字','tabLabels',applyTheme)}${toggleRow('我的页搜索按钮','librarySearch',()=>{if(route.kind==='library')render();})}${toggleRow('点击封面打开专辑','artworkLink')}${toggleRow('显示歌词翻译','translation')}${toggleRow('逐字歌词（卡拉OK）','karaoke',()=>{const t=player.queue[player.index];if(t)loadLyrics(t.id);})}${selectRow('日文歌词读音','annotation',[['none','无'],['romaji','罗马音']])}${toggleRow('主界面环境色','ambient',()=>{refreshSettings();refreshAmbient();})}${prefs.ambient?ambientIntensityRow():''}</div>`;
-  html+=`<div class="group-label">存储</div><div class="group">${listRow('存储空间','download',openStorage)}${listRow('已下载','music',()=>{closeOverlay(true);navigate({kind:'downloads'});})}</div><div class="group-label">账号</div><div class="group">${loggedIn?`${listRow(account?.nickname||'已登录','user',()=>{})}${button('<span>退出登录</span>',()=>confirmAction('退出登录','将退出当前账号，本地下载与设置会保留。',async()=>{await native('logout');resetAccountSession(false);closeOverlay(true);render();}),'list-row danger')}`:listRow('登录','user',()=>openLogin())}</div>`;
-  html+=`<div class="group-label">关于</div><div class="group">${listRow('Antunes','music',openAbout,'<small>1.7</small>')}${listRow('开源许可','album',openLicenses)}</div>`;
+  html+=`<div class="group-label">存储</div><div class="group">${listRow('存储空间','download',openStorage)}${listRow('已下载','music',()=>{closeOverlay(true);navigate({kind:'downloads'});})}</div><div class="group-label">账号</div><div class="group">${loggedIn?`${listRow(account?.nickname||'已登录','user',()=>{})}${accountOwner()?listRow('自定义个人简介','user',openCustomProfileBio):''}${button('<span>退出登录</span>',()=>confirmAction('退出登录','将退出当前账号，本地下载与设置会保留。',async()=>{await native('logout');resetAccountSession(false);closeOverlay(true);render();}),'list-row danger')}`:listRow('登录','user',()=>openLogin())}</div>`;
+  html+=`<div class="group-label">关于</div><div class="group">${listRow('Antunes','music',openAbout,'<small>1.8</small>')}${listRow('开源许可','album',openLicenses)}</div>`;
   return html;
 }
 function openSettings(){showOverlay('settings',settingsHTML(),{title:'设置'});}
-function openAbout(){showOverlay('about',`<div class="about"><img src="icon.png" alt="Antunes 图标"><h2>Antunes</h2><p>随心而听的第三方网易云客户端</p><div class="group about-meta"><div class="list-row about-row"><span class="about-row-icon">${icon('user')}</span><strong>作者</strong><small>Anyu</small></div><div class="list-row about-row"><span class="about-row-icon">${icon('album')}</span><strong>当前版本</strong><small>1.7</small></div><div class="list-row about-row" role="button" tabindex="0" data-open-repo><span class="about-row-icon">${icon('link')}</span><strong>仓库</strong><small>Anyu1014/Antunes ›</small></div></div><p class="notice" style="margin-top:16px">许可证：LGPL-3.0-only</p></div>`,{title:'关于'});const repo=$('[data-open-repo]');if(repo)repo.onclick=()=>native('openUrl',{url:'https://github.com/Anyu1014/Antunes'}).catch(()=>{});}
+function openAbout(){showOverlay('about',`<div class="about"><img src="icon.png" alt="Antunes 图标"><h2>Antunes</h2><p>随心而听的第三方网易云客户端</p><div class="group about-meta"><div class="list-row about-row"><span class="about-row-icon">${icon('user')}</span><strong>作者</strong><small>Anyu</small></div><div class="list-row about-row"><span class="about-row-icon">${icon('album')}</span><strong>当前版本</strong><small>1.8</small></div><div class="list-row about-row" role="button" tabindex="0" data-open-repo><span class="about-row-icon">${icon('link')}</span><strong>仓库</strong><small>Anyu1014/Antunes ›</small></div></div><p class="notice" style="margin-top:16px">许可证：LGPL-3.0-only</p></div>`,{title:'关于'});const repo=$('[data-open-repo]');if(repo)repo.onclick=()=>native('openUrl',{url:'https://github.com/Anyu1014/Antunes'}).catch(()=>{});}
 function openLicenses(){showOverlay('licenses',`<div class="pad"><h3>Kumone</h3><p class="notice">Copyright © missuo / MOE AI LLC 与贡献者。源码与改动适用 LGPL-3.0-only；发行源码包含完整 LICENSE、COPYING。Anyu 磨砂样式由本机 Anyu 项目复用。</p><h3>QRCode</h3><p class="notice">node-qrcode · Copyright © 2012–2015 Ryan Day, 2015–2017 Soldair, 2016–2017 Enrico La Monica · MIT License。完整文本随应用 QRCODE-LICENSE.txt 附带。</p></div>`,{title:'开源许可'});}
 async function openStorage(){
   const items=await native('downloads');const stats=(await native('lyricStats'))||{count:0,bytes:0};

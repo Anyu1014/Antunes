@@ -125,7 +125,6 @@ final class PlayerService: ObservableObject {
     @Published private(set) var isBuffering = false
     @Published private(set) var duration: TimeInterval = 0
     @Published private(set) var servedQuality: String?
-    @Published private(set) var unblockSource: String?
     @Published private(set) var isTrial = false
     let clock = PlaybackClock()
     let lyricsCursor = LyricsCursor()
@@ -205,8 +204,6 @@ final class PlayerService: ObservableObject {
     /// when the song itself shows no reason it can't be played.
     private var lastRefusalCode: Int?
     private static let resolveLog = Logger(subsystem: "sb.moe.kumone", category: "playback")
-    private var attemptedUnblockSources: Set<AudioSourceID> = []
-    private var currentUnblockSourceID: AudioSourceID?
     /// The resolve generation that already spent its one reload after a
     /// failed item, so a reload that fails too gives up instead of looping.
     private var itemRetryGeneration: Int?
@@ -239,11 +236,6 @@ final class PlayerService: ObservableObject {
     private let queuePrefetcher = QueuePrefetcher()
     private var prefetchObservations: Set<AnyCancellable> = []
     private var prefetchUpdateScheduled = false
-
-    private enum ResolvedURLLoadResult {
-        case loaded
-        case superseded
-    }
 
     private init() {
         engine.actionAtItemEnd = .pause
@@ -749,9 +741,6 @@ final class PlayerService: ObservableObject {
         progress = resumeAt
         duration = track.duration
         servedQuality = nil
-        unblockSource = nil
-        currentUnblockSourceID = nil
-        attemptedUnblockSources.removeAll()
         itemStatusObservation?.invalidate()
         itemStatusObservation = nil
         isTrial = false
@@ -791,7 +780,6 @@ final class PlayerService: ObservableObject {
                                 skipsLocalCopies: Bool = false,
                                 resumeAt: TimeInterval = 0) async {
         let quality = AudioQuality.exhigh.rawValue
-        let allowsUnblock = SettingsManager.shared.canResolveUnblockedTracks
         let cacheEnabled = SettingsManager.shared.enableAudioCache && !skipsLocalCopies
         lastResolveFailure = nil
         lastRefusalCode = nil
@@ -805,11 +793,6 @@ final class PlayerService: ObservableObject {
 
         if cacheEnabled {
             do {
-                // A copy from a third-party source is not played ahead of
-                // the service: it was cached when the service once refused
-                // the song, often for a moment, and would otherwise stand in
-                // for it from then on. It is still played below, once the
-                // service refuses again.
                 if let cached = try await AudioCache.shared.entry(
                     for: track.id,
                     requestedQuality: quality,
@@ -822,10 +805,7 @@ final class PlayerService: ObservableObject {
                         return
                     }
                     servedQuality = cached.metadata.servedQuality
-                    if case .unblock(let source) = cached.metadata.source {
-                        unblockSource = source
-                    }
-                    _ = await installResolvedAsset(
+                    await installResolvedAsset(
                         AVURLAsset(url: cached.fileURL),
                         for: track,
                         generation: generation,
@@ -842,7 +822,7 @@ final class PlayerService: ObservableObject {
 
         // Without a network, the cache is the last place to look.
         if usesOfflineQueue {
-            if cacheEnabled, await loadFallbackCache(for: track, generation: generation, allowsUnblock: allowsUnblock, resumeAt: resumeAt) { return }
+            if cacheEnabled, await loadFallbackCache(for: track, generation: generation, resumeAt: resumeAt) { return }
             guard generation == resolveGeneration else { return }
             unavailableOffline(track, generation: generation)
             return
@@ -857,8 +837,7 @@ final class PlayerService: ObservableObject {
                 lastResolveFailure = error.localizedDescription
                 Self.resolveLog.error("Playback URL for \(track.id) failed: \(String(describing: error))")
             }
-            // A download covers a request that died on the network. Anything
-            // else goes on below: a cached copy, then third-party sources.
+            // A download covers a request that died on the network.
             if ConnectivityFailure.matches(error) {
                 if let lease = await acquireOfflineLease(for: track, generation: generation, anyQuality: true) {
                     await playOfflineFile(lease, for: track, generation: generation, resumeAt: resumeAt)
@@ -866,7 +845,7 @@ final class PlayerService: ObservableObject {
                 }
                 guard generation == resolveGeneration else { return }
                 if usesOfflineQueue {
-                    if cacheEnabled, await loadFallbackCache(for: track, generation: generation, allowsUnblock: allowsUnblock, resumeAt: resumeAt) { return }
+                    if cacheEnabled, await loadFallbackCache(for: track, generation: generation, resumeAt: resumeAt) { return }
                     guard generation == resolveGeneration else { return }
                     unavailableOffline(track, generation: generation)
                     return
@@ -882,23 +861,14 @@ final class PlayerService: ObservableObject {
             lastRefusalCode = code
         }
 
-        // The service refused, or offers only a trial: a copy already cached,
-        // of the service's own at another quality or of a third-party source,
-        // plays before third-party sources are asked again. Trials are never
-        // cached, so a cached copy of a trial song is the whole song.
+        // If the service refused or offers only a trial, an official copy
+        // cached earlier can still play. Trial clips are never cached.
         if resolvedURL == nil || data?.freeTrialInfo != nil, cacheEnabled,
-           await loadFallbackCache(for: track, generation: generation, allowsUnblock: allowsUnblock, resumeAt: resumeAt) {
+           await loadFallbackCache(for: track, generation: generation, resumeAt: resumeAt) {
             return
         }
         guard generation == resolveGeneration else { return }
 
-        // The service refused — try third-party sources (unblock-style).
-        if resolvedURL == nil || data?.freeTrialInfo != nil, allowsUnblock {
-            if await resolveAndLoadUnblocked(track, generation: generation, resumeAt: resumeAt) { return }
-        }
-        guard generation == resolveGeneration else { return }
-
-        // The cache was already searched above, before third-party sources.
         guard let url = resolvedURL else {
             handleUnplayable(track)
             return
@@ -909,49 +879,7 @@ final class PlayerService: ObservableObject {
             isTrial = true
             ToastCenter.shared.show(String(localized: "VIP 歌曲，当前为试听片段"))
         }
-        _ = await loadResolvedURL(track, url: url, durationMS: data?.time, generation: generation, resumeAt: resumeAt)
-    }
-
-    private func resolveAndLoadUnblocked(
-        _ track: Track,
-        generation: Int,
-        requiresActivePlayback: Bool = false,
-        resumeAt: TimeInterval = 0
-    ) async -> Bool {
-        let enabledSources = SettingsManager.shared.enabledAudioSourceIDs
-        guard !enabledSources.isEmpty else { return false }
-
-        guard generation == resolveGeneration,
-              !requiresActivePlayback || isPlaying
-        else { return false }
-
-        let resolution = await UnblockService.resolve(
-            track,
-            enabledSources: enabledSources,
-            excluding: attemptedUnblockSources
-        )
-        attemptedUnblockSources.formUnion(resolution.attemptedSources)
-        guard let unblocked = resolution.source else { return false }
-        guard generation == resolveGeneration,
-              !requiresActivePlayback || isPlaying
-        else { return false }
-
-        currentUnblockSourceID = unblocked.id
-        unblockSource = unblocked.displayName
-        servedQuality = nil
-        isTrial = false
-
-        let loadResult = await loadResolvedURL(
-            track,
-            url: unblocked.url,
-            durationMS: nil,
-            generation: generation,
-            resumeAt: resumeAt
-        )
-        guard case .loaded = loadResult else { return false }
-
-        ToastCenter.shared.show(String(localized: "已使用第三方音源：\(unblocked.displayName)"))
-        return true
+        await loadResolvedURL(track, url: url, durationMS: data?.time, generation: generation, resumeAt: resumeAt)
     }
 
     private func handleUnplayable(_ track: Track) {
@@ -981,7 +909,7 @@ final class PlayerService: ObservableObject {
         durationMS: Int?,
         generation: Int,
         resumeAt: TimeInterval = 0
-    ) async -> ResolvedURLLoadResult {
+    ) async {
         // Skip a CDN host that just failed to connect (see CDNHost).
         let remote = CDNHost.preferred(for: url)
 
@@ -989,20 +917,19 @@ final class PlayerService: ObservableObject {
         var resourceLoader: CachingAudioResourceLoader?
         if SettingsManager.shared.enableAudioCache, !isTrial {
             let cacheLimitMB = await SettingsManager.shared.effectiveAudioCacheSizeMB()
-            guard generation == resolveGeneration else { return .superseded }
-            let source: AudioCacheSource = unblockSource.map(AudioCacheSource.unblock) ?? .origin
+            guard generation == resolveGeneration else { return }
             do {
                 let loader = try CachingAudioResourceLoader(
                     remoteURL: remote,
                     trackID: track.id,
                     requestedQuality: SettingsManager.shared.audioQuality.rawValue,
                     servedQuality: servedQuality,
-                    source: source,
+                    source: .origin,
                     maximumCacheSizeMB: cacheLimitMB
                 )
                 guard generation == resolveGeneration else {
                     loader.cancel()
-                    return .superseded
+                    return
                 }
                 let cachedAsset = AVURLAsset(url: loader.assetURL)
                 loader.attach(to: cachedAsset)
@@ -1014,7 +941,7 @@ final class PlayerService: ObservableObject {
             }
         }
 
-        return await installResolvedAsset(
+        await installResolvedAsset(
             asset,
             for: track,
             generation: generation,
@@ -1028,13 +955,12 @@ final class PlayerService: ObservableObject {
     private func loadFallbackCache(
         for track: Track,
         generation: Int,
-        allowsUnblock: Bool,
         resumeAt: TimeInterval = 0
     ) async -> Bool {
         do {
             guard let cached = try await AudioCache.shared.fallbackEntry(
                 for: track.id,
-                allowsUnblock: allowsUnblock
+                allowsUnblock: false
             ) else { return false }
             guard generation == resolveGeneration else { return true }
             let lease = await AudioCache.shared.retain(cached)
@@ -1043,10 +969,7 @@ final class PlayerService: ObservableObject {
                 return true
             }
             servedQuality = cached.metadata.servedQuality
-            if case .unblock(let source) = cached.metadata.source {
-                unblockSource = source
-            }
-            _ = await installResolvedAsset(
+            await installResolvedAsset(
                 AVURLAsset(url: cached.fileURL),
                 for: track,
                 generation: generation,
@@ -1071,7 +994,7 @@ final class PlayerService: ObservableObject {
         cacheLease: UUID? = nil,
         offlineLease: OfflinePlaybackLease? = nil,
         resumeAt: TimeInterval = 0
-    ) async -> ResolvedURLLoadResult {
+    ) async {
         // Resolve the audio track before the item goes live: an audio mix attached
         // after playback starts is silently ignored. The one tap now drives both
         // the spectrum and iOS equalizer, so local/cache/offline assets take the
@@ -1084,7 +1007,7 @@ final class PlayerService: ObservableObject {
                 releaseAudioCacheLease(cacheLease)
             }
             if let offlineLease { Task { try? await OfflineStore.shared.release(offlineLease) } }
-            return .superseded
+            return
         }
 
         let item = AVPlayerItem(asset: asset)
@@ -1096,7 +1019,6 @@ final class PlayerService: ObservableObject {
         }
 
         itemStatusObservation?.invalidate()
-        let sourceID = currentUnblockSourceID
         itemStatusObservation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
             switch item.status {
             case .readyToPlay:
@@ -1106,17 +1028,13 @@ final class PlayerService: ObservableObject {
             case .failed:
                 let error = item.error
                 Task { @MainActor in
-                    if let sourceID {
-                        self?.handleUnblockItemFailure(track: track, generation: generation, sourceID: sourceID)
-                    } else {
-                        self?.handleItemFailure(
-                            track: track,
-                            generation: generation,
-                            remoteURL: remoteURL,
-                            durationMS: durationMS,
-                            error: error
-                        )
-                    }
+                    self?.handleItemFailure(
+                        track: track,
+                        generation: generation,
+                        remoteURL: remoteURL,
+                        durationMS: durationMS,
+                        error: error
+                    )
                 }
             default:
                 break
@@ -1154,7 +1072,7 @@ final class PlayerService: ObservableObject {
             let length = durationMS.map { TimeInterval($0) / 1000 } ?? duration
             let time = CMTime(seconds: length > 0.1 ? min(resumeAt, length - 0.1) : resumeAt, preferredTimescale: 600)
             _ = await engine.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
-            guard generation == resolveGeneration else { return .superseded }
+            guard generation == resolveGeneration else { return }
         }
         if isPlaying {
             engine.play()
@@ -1170,44 +1088,6 @@ final class PlayerService: ObservableObject {
             duration = TimeInterval(durationMS) / 1000
             NowPlayingManager.shared.updateMetadata(for: track, duration: duration)
         }
-        return .loaded
-    }
-
-    private func handleUnblockItemFailure(
-        track: Track,
-        generation: Int,
-        sourceID: AudioSourceID
-    ) {
-        guard generation == resolveGeneration,
-              currentTrack?.id == track.id,
-              currentUnblockSourceID == sourceID
-        else { return }
-
-        itemStatusObservation?.invalidate()
-        itemStatusObservation = nil
-        currentUnblockSourceID = nil
-        unblockSource = nil
-        engine.replaceCurrentItem(with: nil)
-        releaseCurrentPlaybackResources()
-        AudioSpectrum.shared.beginPreparing()
-
-        guard isPlaying else {
-            return
-        }
-
-        Task {
-            let loaded = await resolveAndLoadUnblocked(
-                track,
-                generation: generation,
-                requiresActivePlayback: true
-            )
-            guard isPlaying else { return }
-            guard loaded else {
-                guard generation == resolveGeneration else { return }
-                handleUnplayable(track)
-                return
-            }
-        }
     }
 
     /// The song is playing for real: the failure streak is over.
@@ -1222,8 +1102,7 @@ final class PlayerService: ObservableObject {
     /// streams that bypass it), otherwise from a freshly resolved URL, since a
     /// signature may have expired, the network changed, or the local file
     /// was bad. With no network at all, or when the reload fails for lack of
-    /// one, a downloaded copy takes over; any other second failure goes to the
-    /// third-party sources, then skips.
+    /// one, a downloaded copy takes over; any other second failure skips.
     private func handleItemFailure(
         track: Track,
         generation: Int,
@@ -1231,10 +1110,7 @@ final class PlayerService: ObservableObject {
         durationMS: Int?,
         error: Error?
     ) {
-        guard generation == resolveGeneration,
-              currentTrack?.id == track.id,
-              currentUnblockSourceID == nil
-        else { return }
+        guard generation == resolveGeneration, currentTrack?.id == track.id else { return }
 
         itemStatusObservation?.invalidate()
         itemStatusObservation = nil
@@ -1247,14 +1123,7 @@ final class PlayerService: ObservableObject {
                 handleConnectivityItemFailure(track: track, generation: generation)
                 return
             }
-            Task {
-                guard SettingsManager.shared.canResolveUnblockedTracks,
-                      await resolveAndLoadUnblocked(track, generation: generation) else {
-                    guard generation == resolveGeneration else { return }
-                    handleUnplayable(track)
-                    return
-                }
-            }
+            handleUnplayable(track)
             return
         }
         itemRetryGeneration = generation
@@ -1270,7 +1139,7 @@ final class PlayerService: ObservableObject {
         let resumeAt = progress > 1 ? progress : 0
         Task {
             if let twin {
-                _ = await loadResolvedURL(track, url: twin, durationMS: durationMS, generation: generation, resumeAt: resumeAt)
+                await loadResolvedURL(track, url: twin, durationMS: durationMS, generation: generation, resumeAt: resumeAt)
             } else {
                 await resolveAndLoad(track, generation: generation, skipsLocalCopies: remoteURL == nil, resumeAt: resumeAt)
             }
@@ -1388,7 +1257,7 @@ final class PlayerService: ObservableObject {
         let pending = Set(DownloadManager.shared.pendingJobs.filter { $0.accountScope == scope }.map(\.track.id))
         queuePrefetcher.update(.init(scope: scope, currentTrackID: current.id, tracks: upcoming,
                                      quality: SettingsManager.shared.audioQuality.rawValue,
-                                     allowsUnblock: SettingsManager.shared.canResolveUnblockedTracks,
+                                     allowsUnblock: false,
                                      pendingDownloadTrackIDs: pending))
     }
 
@@ -1415,7 +1284,7 @@ final class PlayerService: ObservableObject {
     private func playOfflineFile(_ lease: OfflinePlaybackLease, for track: Track, generation: Int,
                                  resumeAt: TimeInterval = 0) async {
         servedQuality = lease.descriptor.identity.quality
-        _ = await installResolvedAsset(AVURLAsset(url: lease.url), for: track, generation: generation,
+        await installResolvedAsset(AVURLAsset(url: lease.url), for: track, generation: generation,
                                        durationMS: Int(lease.descriptor.duration * 1000),
                                        offlineLease: lease, resumeAt: resumeAt)
     }
@@ -1520,8 +1389,7 @@ final class PlayerService: ObservableObject {
     /// Whether the song cache can play the track without the network.
     private func isCachedForOffline(_ trackID: Int) async -> Bool {
         guard SettingsManager.shared.enableAudioCache else { return false }
-        let allowsUnblock = SettingsManager.shared.canResolveUnblockedTracks
-        return (try? await AudioCache.shared.fallbackEntry(for: trackID, allowsUnblock: allowsUnblock)) != nil
+        return (try? await AudioCache.shared.fallbackEntry(for: trackID, allowsUnblock: false)) != nil
     }
 
     private func stillHolds(_ candidate: PlaybackQueueCandidate) -> Bool {

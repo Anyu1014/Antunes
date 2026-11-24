@@ -246,6 +246,9 @@ private struct AccountChip: View {
     let avatarImage: PlatformImage?
 
     @EnvironmentObject private var account: AccountStore
+    #if os(iOS)
+    @EnvironmentObject private var settings: SettingsManager
+    #endif
     @State private var showPopover = false
     @State private var isHovering = false
 
@@ -314,7 +317,12 @@ private struct AccountChip: View {
                         VIPBadge()
                     }
                 }
-                if let signature = profile.signature, !signature.isEmpty {
+                #if os(iOS)
+                let signature = settings.displayedProfileBio(for: profile)
+                #else
+                let signature = profile.signature
+                #endif
+                if let signature, !signature.isEmpty {
                     Text(signature)
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)

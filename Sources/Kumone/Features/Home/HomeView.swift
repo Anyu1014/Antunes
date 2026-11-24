@@ -182,6 +182,7 @@ struct HomeView: View {
     @EnvironmentObject private var account: AccountStore
     @EnvironmentObject private var player: PlayerService
     @StateObject private var model = HomeViewModel.shared
+    @AppStorage(HomeFeed.hiddenSectionsKey) private var hiddenHomeSections = ""
 
     var body: some View {
         GeometryReader { geometry in
@@ -280,6 +281,10 @@ struct HomeView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    private func showsHomeSection(_ key: String) -> Bool {
+        !hiddenHomeSections.split(separator: ",").contains(Substring(key))
+    }
+
     private func loadedBody(cardSize: CGFloat,
                             featureCardWidth: CGFloat = FeatureCard.designWidth,
                             featureGap: CGFloat = 16,
@@ -293,10 +298,14 @@ struct HomeView: View {
         let artistSize: CGFloat = 128
         let artistRowHeight = Theme.Layout.artistShelfHeight
         #endif
+        let visibleSections = model.sections.filter { showsHomeSection($0.slot.rawValue) }
+        let showsFeatureCards = HomeSupplement.shortcuts.contains {
+            showsHomeSection($0.rawValue)
+        }
         return LazyVStack(alignment: .leading, spacing: Theme.Layout.sectionSpacing) {
             // Anonymous users go straight to recommended playlists;
             // the login entry lives in the sidebar / 我的 tab only.
-            if account.isLoggedIn, columns != .right {
+            if account.isLoggedIn, columns != .right, showsFeatureCards {
                 featureCards(width: featureCardWidth, gap: featureGap)
                     .padding(.top, 8)
             }
@@ -304,14 +313,14 @@ struct HomeView: View {
             if !model.sections.isEmpty {
                 // 板块顺序、标题都以服务端下发的为准（参考实现的九个板块，
                 // 不含「根据你听过的热门节目推荐」）。横屏分栏时按序号分到左右两栏。
-                ForEach(Array(model.sections.enumerated()), id: \.element.id) { index, section in
+                ForEach(Array(visibleSections.enumerated()), id: \.element.id) { index, section in
                     if columns == .all || (columns == .left) == (index % 2 == 0) {
                         sectionShelf(section)
                     }
                 }
             } else {
                 // 服务端没给板块（未登录或接口失败）时，退回本地拼的这套。
-                if columns != .right, !model.recommendPlaylists.isEmpty {
+                if columns != .right, showsHomeSection(HomeFeedSlot.recommendedPlaylists.rawValue), !model.recommendPlaylists.isEmpty {
                     Shelf(title: "推荐歌单", rowHeight: Theme.Layout.coverShelfHeight) {
                         ForEach(Array(model.recommendPlaylists.prefix(12).enumerated()), id: \.element.id) { index, playlist in
                             playlistCard(playlist)
@@ -320,7 +329,7 @@ struct HomeView: View {
                     }
                 }
 
-                if columns != .right, !model.radarPlaylists.isEmpty {
+                if columns != .right, showsHomeSection(HomeFeedSlot.radarPlaylists.rawValue), !model.radarPlaylists.isEmpty {
                     Shelf(title: "雷达歌单", rowHeight: Theme.Layout.coverShelfHeight) {
                         ForEach(model.radarPlaylists) { radar in
                             NavigationLink(value: Destination.radarPlaylist(radar.id)) {
@@ -338,7 +347,7 @@ struct HomeView: View {
                     }
                 }
 
-                if columns != .left, !model.toplists.isEmpty {
+                if columns != .left, showsHomeSection(HomeFeedSlot.charts.rawValue), !model.toplists.isEmpty {
                     Shelf(title: "排行榜", seeAll: nil, rowHeight: Theme.Layout.coverShelfHeight) {
                         ForEach(model.toplists) { toplist in
                             NavigationLink(value: Destination.playlist(toplist.id)) {
@@ -352,7 +361,7 @@ struct HomeView: View {
             }
 
             // 新碟上架 / 推荐歌手：不在参考实现的九板块里，本项目保留，固定排在它们之后。
-            if columns != .left, !model.newAlbums.isEmpty {
+            if columns != .left, showsHomeSection(HomeSupplement.newAlbums.rawValue), !model.newAlbums.isEmpty {
                 Shelf(title: "新碟上架", rowHeight: albumRowHeight) {
                     ForEach(model.newAlbums) { album in
                         albumCard(album, size: cardSize)
@@ -360,7 +369,7 @@ struct HomeView: View {
                 }
             }
 
-            if columns != .left, !model.topArtists.isEmpty {
+            if columns != .left, showsHomeSection(HomeSupplement.topArtists.rawValue), !model.topArtists.isEmpty {
                 Shelf(title: "推荐歌手", rowHeight: artistRowHeight) {
                     ForEach(model.topArtists) { artist in
                         artistCard(artist, size: artistSize)
@@ -450,7 +459,7 @@ struct HomeView: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: gap) {
                 Color.clear.frame(width: max(0, Theme.Layout.contentInset - 16), height: 1)
-                if account.isLoggedIn {
+                if showsHomeSection(HomeSupplement.daily.rawValue) {
                     NavigationLink(value: Destination.daily) {
                         FeatureCard(
                             title: "每日推荐",
@@ -462,7 +471,9 @@ struct HomeView: View {
                         )
                     }
                     .buttonStyle(.plain)
+                }
 
+                if showsHomeSection(HomeSupplement.privateFM.rawValue) {
                     Button {
                         player.startFM()
                     } label: {
@@ -476,7 +487,9 @@ struct HomeView: View {
                         )
                     }
                     .buttonStyle(.interactiveCard)
+                }
 
+                if showsHomeSection(HomeSupplement.heartbeat.rawValue) {
                     Button {
                         startHeartbeatMode()
                     } label: {

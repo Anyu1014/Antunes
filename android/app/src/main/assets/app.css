@@ -68,6 +68,10 @@
 .playlist-nav-button svg{width:24px;height:24px}
 .playlist-search{margin:0 16px 14px;display:flex;align-items:center;gap:8px;background:color-mix(in srgb,var(--ink) 7%,transparent);border-radius:10px;padding:0 12px;height:42px;color:var(--secondary)}
 .playlist-search svg{width:19px;height:19px}.playlist-search input{width:100%;border:0;outline:none;background:none;font-size:16px}
+.section-management > details + details{border-top:1px solid var(--line)}
+.section-management > details > summary{cursor:pointer;padding:14px 16px;font-weight:600;line-height:22px}
+.section-management > details > .group{margin:0 8px 8px;border-radius:14px}
+.section-management > details > .group-note{margin:0 16px 12px}
 .playlist-summary{display:flex;gap:14px;align-items:flex-start;padding:0 16px}
 .playlist-cover{width:120px;max-width:35%;height:auto;aspect-ratio:1;border-radius:8px;flex-shrink:0;box-shadow:0 7px 18px #0002}
 .playlist-cover.placeholder{display:grid;place-items:center;color:var(--secondary)}
@@ -831,3 +835,14 @@ body.chrome-hidden #chrome{display:none}
 .rank-col + .rank-col{border-left:1px solid var(--sep, rgba(127,127,127,.25))}
 .rank-head{width:100%;justify-content:center;border-radius:0;margin:0 0 6px;background:var(--card);color:var(--text-2,var(--text))}
 .rank-head.active{background:var(--card);color:var(--accent)}
+
+/* Keep the centered picker on the same glass setting as the other sheets. */
+.sheet.playlist-picker-sheet{inset:0;margin:auto;width:min(380px,calc(100% - 32px));height:max-content;max-height:calc(100% - var(--safe-top) - var(--safe-bottom) - 24px);display:flex;flex-direction:column;overflow:hidden;padding:0;border-radius:26px;animation:fade .18s ease-out}
+.playlist-picker-sheet>.drag{display:none}
+.playlist-picker-sheet .sheet-header{position:static;flex:none;background:transparent;backdrop-filter:none;-webkit-backdrop-filter:none}
+.playlist-picker-sheet .sheet-body{display:flex;flex-direction:column;min-height:0;padding:0}
+.playlist-picker-list{min-height:0;max-height:min(45dvh,320px);overflow:auto;overscroll-behavior:contain;padding:0 8px}
+.playlist-picker-create{flex:none;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;border-top:1px solid var(--line);padding:12px}
+.playlist-picker-create input{min-width:0;padding:0 12px;height:44px}
+.playlist-picker-create button{min-height:44px;padding:0 14px;white-space:nowrap;background:#d62f36;color:#fff;border-radius:14px;font-weight:600}
+.playlist-picker-create .status-error{grid-column:1/-1;font-size:12px;overflow-wrap:anywhere}

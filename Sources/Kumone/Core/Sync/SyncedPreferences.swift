@@ -23,15 +23,23 @@ struct SyncedPreferences: Codable, Equatable {
 extension SettingsManager {
     /// Keep the portable preference contract beside its projection and validation.
     var syncPreferenceChanges: AnyPublisher<Void, Never> {
-        Publishers.MergeMany([
+        let sourceChanges: [AnyPublisher<Void, Never>]
+        #if os(macOS)
+        sourceChanges = [
+            $enableUnblock.removeDuplicates().map { _ in () }.eraseToAnyPublisher(),
+            $enabledAudioSourceIDs.removeDuplicates().map { _ in () }.eraseToAnyPublisher()
+        ]
+        #else
+        sourceChanges = []
+        #endif
+
+        return Publishers.MergeMany(sourceChanges + [
             $audioQuality.removeDuplicates().map { _ in () }.eraseToAnyPublisher(),
             $downloadQuality.removeDuplicates().map { _ in () }.eraseToAnyPublisher(),
             $appearance.removeDuplicates().map { _ in () }.eraseToAnyPublisher(),
             $showLyricsTranslation.removeDuplicates().map { _ in () }.eraseToAnyPublisher(),
             $lyricsAnnotation.removeDuplicates().map { _ in () }.eraseToAnyPublisher(),
             $verbatimLyrics.removeDuplicates().map { _ in () }.eraseToAnyPublisher(),
-            $enableUnblock.removeDuplicates().map { _ in () }.eraseToAnyPublisher(),
-            $enabledAudioSourceIDs.removeDuplicates().map { _ in () }.eraseToAnyPublisher(),
             $showMainWindowAmbientBackground.removeDuplicates().map { _ in () }.eraseToAnyPublisher(),
             $mainWindowAmbientBackgroundIntensity.removeDuplicates().map { _ in () }.eraseToAnyPublisher()
         ]).eraseToAnyPublisher()
@@ -40,16 +48,24 @@ extension SettingsManager {
     /// Explicit portable preferences; cache policy, output routing and platform
     /// layouts stay local. Unknown fields remain in SyncedPreferences for newer apps.
     var syncPreferences: [String: PreferenceValue] {
-        [Keys.quality: .string(audioQuality.rawValue),
-         Keys.downloadQuality: .string(downloadQuality.rawValue),
-         Keys.appearance: .string(appearance.rawValue),
-         Keys.showTranslation: .boolean(showLyricsTranslation),
-         Keys.annotation: .string(lyricsAnnotation.rawValue),
-         Keys.verbatimLyrics: .boolean(verbatimLyrics),
-         Keys.unblock: .boolean(enableUnblock),
-         Keys.unblockSources: .strings(enabledAudioSourceIDs.map(\.rawValue).sorted()),
-         Keys.mainWindowAmbientBackground: .boolean(showMainWindowAmbientBackground),
-         Keys.mainWindowAmbientBackgroundIntensity: .number(mainWindowAmbientBackgroundIntensity)]
+        let common: [String: PreferenceValue] = [
+            Keys.quality: .string(audioQuality.rawValue),
+            Keys.downloadQuality: .string(downloadQuality.rawValue),
+            Keys.appearance: .string(appearance.rawValue),
+            Keys.showTranslation: .boolean(showLyricsTranslation),
+            Keys.annotation: .string(lyricsAnnotation.rawValue),
+            Keys.verbatimLyrics: .boolean(verbatimLyrics),
+            Keys.mainWindowAmbientBackground: .boolean(showMainWindowAmbientBackground),
+            Keys.mainWindowAmbientBackgroundIntensity: .number(mainWindowAmbientBackgroundIntensity)
+        ]
+        #if os(macOS)
+        return common.merging([
+            Keys.unblock: .boolean(enableUnblock),
+            Keys.unblockSources: .strings(enabledAudioSourceIDs.map(\.rawValue).sorted())
+        ]) { _, source in source }
+        #else
+        return common
+        #endif
     }
 
     func applySyncPreferences(_ preferences: SyncedPreferences) throws {
@@ -66,13 +82,15 @@ extension SettingsManager {
                 guard value.isFinite, Self.mainWindowAmbientBackgroundIntensityRange.contains(value) else {
                     throw SyncError.invalidRecord
                 }
+            #if os(macOS)
+            case (Keys.unblock, .boolean), (Keys.unblockSources, .strings): break
+            case (Keys.unblock, _), (Keys.unblockSources, _): throw SyncError.invalidRecord
+            #endif
             case (Keys.showTranslation, .boolean), (Keys.verbatimLyrics, .boolean),
-                 (Keys.unblock, .boolean), (Keys.mainWindowAmbientBackground, .boolean),
-                 (Keys.unblockSources, .strings): break
+                 (Keys.mainWindowAmbientBackground, .boolean): break
             case (Keys.quality, _), (Keys.downloadQuality, _), (Keys.appearance, _), (Keys.annotation, _),
                  (Keys.mainWindowAmbientBackgroundIntensity, _), (Keys.showTranslation, _),
-                 (Keys.verbatimLyrics, _), (Keys.unblock, _),
-                 (Keys.mainWindowAmbientBackground, _), (Keys.unblockSources, _):
+                 (Keys.verbatimLyrics, _), (Keys.mainWindowAmbientBackground, _):
                 throw SyncError.invalidRecord
             default: break
             }
@@ -89,11 +107,13 @@ extension SettingsManager {
                 if let annotation = LyricsAnnotation(rawValue: value) { lyricsAnnotation = annotation }
             case (Keys.showTranslation, .boolean(let value)): showLyricsTranslation = value
             case (Keys.verbatimLyrics, .boolean(let value)): verbatimLyrics = value
-            case (Keys.unblock, .boolean(let value)): enableUnblock = value
             case (Keys.mainWindowAmbientBackground, .boolean(let value)): showMainWindowAmbientBackground = value
             case (Keys.mainWindowAmbientBackgroundIntensity, .number(let value)): mainWindowAmbientBackgroundIntensity = value
+            #if os(macOS)
+            case (Keys.unblock, .boolean(let value)): enableUnblock = value
             case (Keys.unblockSources, .strings(let value)):
                 enabledAudioSourceIDs = Set(value.compactMap(AudioSourceID.init(rawValue:)))
+            #endif
             default: break
             }
         }

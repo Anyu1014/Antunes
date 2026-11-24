@@ -187,7 +187,7 @@ struct TrackRow: View {
         }
         #endif
         .contextMenu { contextMenuItems }
-        .sheet(item: $addToPlaylistTrack) { selectedTrack in
+        .addToPlaylistPicker(item: $addToPlaylistTrack) { selectedTrack in
             AddToPlaylistSheet(track: selectedTrack)
         }
         .sheet(item: $commentsTrack) { selectedTrack in
@@ -740,11 +740,41 @@ struct TrackListView: View {
 
 // MARK: - Add to playlist
 
+extension View {
+    @ViewBuilder
+    func addToPlaylistPicker<Item: Identifiable>(
+        item: Binding<Item?>, content: @escaping (Item) -> AddToPlaylistSheet
+    ) -> some View {
+        #if os(iOS)
+        fullScreenCover(item: item) { item in
+            content(item).centeredPickerPresentation()
+        }
+        #else
+        sheet(item: item, content: content)
+        #endif
+    }
+
+    @ViewBuilder
+    func addToPlaylistPicker(
+        isPresented: Binding<Bool>, content: @escaping () -> AddToPlaylistSheet?
+    ) -> some View {
+        #if os(iOS)
+        fullScreenCover(isPresented: isPresented) { content()?.centeredPickerPresentation() }
+        #else
+        sheet(isPresented: isPresented, content: content)
+        #endif
+    }
+}
+
 struct AddToPlaylistSheet: View {
     let tracks: [Track]
+    private let centered: Bool
 
-    init(track: Track) { self.tracks = [track] }
-    init(tracks: [Track]) { self.tracks = tracks }
+    init(track: Track) { self.init(tracks: [track]) }
+    init(tracks: [Track], centered: Bool = false) {
+        self.tracks = tracks
+        self.centered = centered
+    }
 
     @EnvironmentObject private var account: AccountStore
     @Environment(\.dismiss) private var dismiss
@@ -755,11 +785,78 @@ struct AddToPlaylistSheet: View {
 
     private var isBusy: Bool { creating || busyPlaylistID != nil }
 
+    @ViewBuilder
     var body: some View {
+        #if os(iOS)
+        if centered {
+            centeredPanel
+        } else {
+            panel(listHeight: 280).frame(width: 340)
+        }
+        #else
+        panel(listHeight: 280).frame(width: 340)
+        #endif
+    }
+
+    #if os(iOS)
+    @ViewBuilder
+    func centeredPickerPresentation() -> some View {
+        let picker = AddToPlaylistSheet(tracks: tracks, centered: true)
+        // Keep the system backdrop on iOS 16/17; a clear fullscreen cover can hang on iOS 17.
+        if #available(iOS 18.0, *) {
+            picker.presentationBackground(.clear)
+        } else {
+            picker
+        }
+    }
+
+    private var centeredPanel: some View {
+        GeometryReader { geometry in
+            ZStack {
+                Color.black.opacity(0.18)
+                    .ignoresSafeArea()
+                    .onTapGesture { if !isBusy { dismiss() } }
+                    .accessibilityHidden(true)
+
+                let listHeight = min(280, max(0, geometry.size.height - 200))
+                let shape = RoundedRectangle(cornerRadius: 28, style: .continuous)
+                let content = panel(listHeight: listHeight, centered: true)
+                    .frame(width: min(380, max(0, geometry.size.width - 32)))
+                    .accessibilityElement(children: .contain)
+                if #available(iOS 26.0, *) {
+                    content.glassEffect(.regular, in: shape)
+                } else {
+                    content.background(.regularMaterial, in: shape)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+    #endif
+
+    private func panel(listHeight: CGFloat, centered: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("收藏到歌单")
-                .font(.headline)
-                .padding(16)
+            HStack {
+                Text("收藏到歌单")
+                    .font(.headline)
+                    .accessibilityAddTraits(.isHeader)
+                if centered {
+                    Spacer()
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("关闭")
+                    .disabled(isBusy)
+                }
+            }
+            .padding(.leading, 16)
+            .padding(.trailing, centered ? 6 : 16)
+            .padding(.vertical, centered ? 4 : 16)
             if let statusMessage {
                 Text(statusMessage)
                     .font(.system(size: 12.5, weight: .medium))
@@ -772,7 +869,8 @@ struct AddToPlaylistSheet: View {
             Divider().opacity(0.4)
             if account.createdPlaylists.isEmpty {
                 EmptyStateView(icon: "music.note.list", title: "还没有创建歌单")
-                    .frame(height: 200)
+                    .frame(height: min(200, listHeight))
+                    .clipped()
             } else {
                 ScrollView {
                     LazyVStack(spacing: 1) {
@@ -809,20 +907,59 @@ struct AddToPlaylistSheet: View {
                     }
                     .padding(8)
                 }
-                .frame(height: 280)
+                .frame(height: listHeight)
             }
             Divider().opacity(0.4)
-            HStack {
-                TextField("新建歌单", text: $newName)
-                    .textFieldStyle(.roundedBorder)
-                Button("创建并收藏") {
-                    createAndAdd()
-                }
-                .disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty || isBusy)
+            #if os(iOS)
+            if #available(iOS 26.0, *) {
+                GlassEffectContainer(spacing: 8) { createControls }
+                    .padding(12)
+            } else {
+                createControls.padding(12)
             }
-            .padding(12)
+            #else
+            createControls
+                .padding(12)
+            #endif
         }
-        .frame(width: 340)
+    }
+
+    private var createControls: some View {
+        HStack(spacing: 8) {
+            #if os(iOS)
+            inputField
+            createButton
+            #else
+            TextField("新建歌单", text: $newName)
+                .textFieldStyle(.roundedBorder)
+            createButton
+            #endif
+        }
+    }
+
+    #if os(iOS)
+    private var inputField: some View {
+        TextField("新建歌单", text: $newName)
+            .textFieldStyle(.plain)
+            .padding(.horizontal, 14)
+            .frame(minWidth: 0, maxWidth: .infinity, minHeight: 44)
+            .modifier(PlaylistInputGlass())
+    }
+    #endif
+
+    private var createButton: some View {
+        Button("创建并收藏") { createAndAdd() }
+            #if os(iOS)
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(.white)
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .padding(.horizontal, 14)
+            .frame(minHeight: 44)
+            .modifier(PlaylistCreateGlass())
+            .buttonStyle(.plain)
+            #endif
+            .disabled(newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isBusy)
     }
 
     private func add(to playlist: PlaylistSummary) {
@@ -841,7 +978,7 @@ struct AddToPlaylistSheet: View {
     }
 
     private func createAndAdd() {
-        let name = newName.trimmingCharacters(in: .whitespaces)
+        let name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, !isBusy, !tracks.isEmpty else { return }
         statusMessage = nil
         creating = true
@@ -881,6 +1018,30 @@ struct AddToPlaylistSheet: View {
         ToastCenter.shared.show(message)
     }
 }
+
+#if os(iOS)
+private struct PlaylistInputGlass: ViewModifier {
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+        if #available(iOS 26.0, *) {
+            content.glassEffect(.regular.interactive(), in: shape)
+        } else {
+            content.background(.regularMaterial, in: shape)
+        }
+    }
+}
+
+private struct PlaylistCreateGlass: ViewModifier {
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+        if #available(iOS 26.0, *) {
+            content.glassEffect(.regular.tint(.blue).interactive(), in: shape)
+        } else {
+            content.background(Color.blue, in: shape)
+        }
+    }
+}
+#endif
 
 enum PlaylistAddError {
     /// NetEase (and mirrored clients) report an already-present track with a

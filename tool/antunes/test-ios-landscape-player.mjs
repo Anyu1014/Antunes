@@ -7,8 +7,11 @@ try{
   const transport=source.split('private var landscapeTransportRow')[1].split('#endif')[0];
   assert.match(landscape,/artworkView[\s\S]*trackMetaView[\s\S]*NowPlayingScrubber\(\)[\s\S]*landscapeTransportRow[\s\S]*RegularCommentsPanel[\s\S]*lyricsScroll/,'wide player is not the reference split-layout');
   assert.doesNotMatch(landscape,/RegularColumnSwitch|landscapeUtilityRow/);
+  assert.match(landscape,/artworkView\(size: artworkSize\)\s*\.scaleEffect\(1\.08\)/,'landscape cover must grow without moving its layout frame');
+  assert.match(landscape,/VStack\(spacing: gap\) \{\s*trackMetaView\s*VStack\(spacing: 14\) \{\s*NowPlayingScrubber\(\)\s*landscapeTransportRow\s*\}\s*\}\s*\.offset\(y: controlsOffset\)/,'only metadata, scrubber and controls should move down together');
+  assert.match(landscape,/let controlsOffset = min\(14, max\(0, \(size\.height - 260\) \/ 5\)\)/,'short screens need a smaller controls offset');
   assert.match(transport,/heart\.fill[\s\S]*backward\.fill[\s\S]*playPauseButton\(\)[\s\S]*forward\.fill[\s\S]*regularColumnPage = showsComments \? \.lyrics : \.comments/);
   assert.doesNotMatch(transport,/RoutePickerButton|SoundEffectsButton|cycleRepeatMode|cycleQueueOrder/);
   assert.match(source,/geo.size.width < 720 && geo.size.width <= geo.size.height/);
-  console.log('PASS: iOS horizontal layout uses split cover and lyrics/comments with five ordered controls and no top toggle');
+  console.log('PASS: iOS horizontal layout uses split cover and lyrics/comments with five ordered controls and anchored larger artwork above lowered controls');
 }catch(error){console.log('FAIL: '+error.message.split('\n')[0]);process.exitCode=1;}

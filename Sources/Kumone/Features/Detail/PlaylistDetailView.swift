@@ -918,7 +918,7 @@ struct PlaylistDetailView: View {
             .accessibilityIdentifier("playlist-select-done")
         }
         .padding(.vertical, 2)
-        .sheet(isPresented: $addSelectionToPlaylist) {
+        .addToPlaylistPicker(isPresented: $addSelectionToPlaylist) {
             AddToPlaylistSheet(tracks: selectedTrackList)
         }
     }

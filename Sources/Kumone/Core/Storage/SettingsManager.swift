@@ -141,10 +141,10 @@ final class SettingsManager: ObservableObject {
         static let verbatimLyrics = "settings.verbatimLyrics"
         static let volume = "settings.volume"
         static let fmMode = "settings.fmMode"
-        static let unblock = "settings.enableUnblock"
-        static let unblockSources = "settings.enabledUnblockSources"
         static let desktopLyrics = "settings.showDesktopLyrics"
         #if os(macOS)
+        static let unblock = "settings.enableUnblock"
+        static let unblockSources = "settings.enabledUnblockSources"
         static let menuBarPlayer = "settings.showMenuBarPlayer"
         static let automix = "settings.automixEnabled"
         static let automixTransitions = "settings.automixTransitions"
@@ -162,6 +162,7 @@ final class SettingsManager: ObservableObject {
         static let audioCacheSizeMB = "settings.audioCacheSizeMB"
         static let audioCacheAutomatic = "settings.audioCacheAutomatic"
         #if os(iOS)
+        static let customProfileBios = "settings.customProfileBios"
         static let soundEffectPreset = "settings.soundEffectPreset"
         static let customEqualizerGains = "settings.customEqualizerGains"
         #endif
@@ -293,6 +294,7 @@ final class SettingsManager: ObservableObject {
         didSet { UserDefaults.standard.set(verbatimLyrics, forKey: Keys.verbatimLyrics) }
     }
 
+    #if os(macOS)
     /// Resolve gray tracks from third-party sources (unblock-style).
     @Published var enableUnblock: Bool {
         didSet { UserDefaults.standard.set(enableUnblock, forKey: Keys.unblock) }
@@ -311,6 +313,9 @@ final class SettingsManager: ObservableObject {
     var canResolveUnblockedTracks: Bool {
         enableUnblock && !enabledAudioSourceIDs.isEmpty
     }
+    #else
+    var canResolveUnblockedTracks: Bool { false }
+    #endif
 
     /// Floating desktop lyrics window (LyricsX-style).
     @Published var showDesktopLyrics: Bool {
@@ -413,6 +418,29 @@ final class SettingsManager: ObservableObject {
     }
 
     #if os(iOS)
+    @Published private var customProfileBios: [String: String] {
+        didSet { UserDefaults.standard.set(customProfileBios, forKey: Keys.customProfileBios) }
+    }
+
+    func customProfileBio(for userID: Int) -> String {
+        customProfileBios[String(userID)] ?? ""
+    }
+
+    func setCustomProfileBio(_ bio: String, for userID: Int) {
+        let key = String(userID)
+        let custom = bio.trimmingCharacters(in: .whitespacesAndNewlines)
+        if custom.isEmpty {
+            customProfileBios.removeValue(forKey: key)
+        } else {
+            customProfileBios[key] = custom
+        }
+    }
+
+    func displayedProfileBio(for profile: UserProfile) -> String? {
+        let custom = customProfileBio(for: profile.userId)
+        return custom.isEmpty ? profile.signature : custom
+    }
+
     @Published var soundEffectPreset: SoundEffectPreset {
         didSet {
             UserDefaults.standard.set(soundEffectPreset.rawValue, forKey: Keys.soundEffectPreset)
@@ -530,12 +558,14 @@ final class SettingsManager: ObservableObject {
         lyricsAnnotation = defaults.string(forKey: Keys.annotation).flatMap(LyricsAnnotation.init)
             ?? (defaults.bool(forKey: Keys.showRomaji) ? .romaji : .off)
         verbatimLyrics = defaults.object(forKey: Keys.verbatimLyrics) as? Bool ?? true
+        #if os(macOS)
         enableUnblock = defaults.object(forKey: Keys.unblock) as? Bool ?? true
         if let rawSourceIDs = defaults.stringArray(forKey: Keys.unblockSources) {
             enabledAudioSourceIDs = Set(rawSourceIDs.compactMap(AudioSourceID.init))
         } else {
             enabledAudioSourceIDs = Set(AudioSourceID.allCases)
         }
+        #endif
         showDesktopLyrics = defaults.object(forKey: Keys.desktopLyrics) as? Bool ?? false
         #if os(macOS)
         automixEnabled = defaults.object(forKey: Keys.automix) as? Bool ?? false
@@ -566,6 +596,7 @@ final class SettingsManager: ObservableObject {
             Self.mainWindowAmbientBackgroundIntensityRange.upperBound
         )
         #if os(iOS)
+        customProfileBios = defaults.dictionary(forKey: Keys.customProfileBios) as? [String: String] ?? [:]
         soundEffectPreset = SoundEffectPreferences.preset(
             from: defaults, key: Keys.soundEffectPreset)
         customEqualizerGains = SoundEffectPreferences.customConfiguration(

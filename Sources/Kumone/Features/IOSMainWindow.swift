@@ -348,20 +348,21 @@ public struct IOSMainWindow: View {
     /// 尺寸从偏好值里补进来；为 0 时按竖屏排版（此时不选横屏布局，避免闪一下再摆正）。
     private func customTabContent(size: CGSize) -> some View {
         Group {
-            let horizontal = size.width > size.height && size.width >= 500
-                && player.hasCurrentTrack && (lyricsOpen || !settings.onlyLibrarySection)
+            let isLandscape = size.width > size.height && size.width >= 500
+            let horizontal = isLandscape && player.hasCurrentTrack && (lyricsOpen || !settings.onlyLibrarySection)
             let layout = horizontal
                 ? AnyLayout(HStackLayout(spacing: 10))
                 : AnyLayout(VStackLayout(spacing: 8))
             let playerWidth = min(316, max(200, (size.width - 36) * 0.36))
             let barHeight = Theme.Layout.FloatingChrome.tabBarHeight
             let bottomOffset: CGFloat = -14
+            let landscapeBottomInset: CGFloat = 20
             let chromeHeight = barHeight + (!horizontal && player.hasCurrentTrack
                 ? Theme.Layout.FloatingChrome.miniPlayerHeight + Theme.Layout.FloatingChrome.barSpacing : 0)
             let clearance = isReadingConversation
                 ? 0
                 : (player.hasCurrentTrack || !settings.onlyLibrarySection
-                    ? chromeHeight + bottomOffset + Theme.Layout.FloatingChrome.extraPadding
+                    ? chromeHeight + (isLandscape ? 0 : bottomOffset) + Theme.Layout.FloatingChrome.extraPadding
                     : Theme.Layout.scrollBreathingMargin)
 
             ZStack {
@@ -386,7 +387,7 @@ public struct IOSMainWindow: View {
             // 顶栏靠这个判断要不要换成渐进模糊；这里只取几何方向，和底栏
             // 的 `horizontal`（还要求有正在播放的歌）解耦。
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .environment(\.isLandscapeWindow, size.width > size.height && size.width >= 500)
+            .environment(\.isLandscapeWindow, isLandscape)
             .environment(\.floatingChromeClearance, clearance)
             .overlay(alignment: .bottom) {
                 Group {
@@ -419,9 +420,8 @@ public struct IOSMainWindow: View {
                 // 玻璃容器 —— 按住放大时它们会像原生底栏那样连出一道颈。
                 .modifier(PlayerGlassMerger(enabled: horizontal))
                 .padding(.horizontal, 18)
-                // 负留白把底栏压进安全区：底栏下缘到屏幕底 = 2 × 主页条中心到屏幕底（约 20pt），
-                // 主页条正好落在「底栏下缘 — 屏幕底」的中点。
-                .padding(.bottom, bottomOffset)
+                // 横屏从屏幕底量 20pt，和竖屏的 34pt 安全区减去 14pt 一致。
+                .padding(.bottom, isLandscape ? landscapeBottomInset : bottomOffset)
                 }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
@@ -433,6 +433,7 @@ public struct IOSMainWindow: View {
                 }
                 // 键盘可覆盖两条底栏，但不改变它们的位置或横竖布局。
                 .ignoresSafeArea(.keyboard, edges: .bottom)
+                .ignoresSafeArea(.container, edges: isLandscape ? .bottom : [])
             }
             // 整屏底色：横屏左右两条安全区（刘海/圆角那两块）露的是窗口色，
             // 铺一层当前 tab 的底色并 ignore 安全区，才能和页面里一致。
@@ -1367,8 +1368,8 @@ struct IOSLibraryView: View {
                                     VIPBadge()
                                 }
                             }
-                            if let sig = profile.signature, !sig.isEmpty {
-                                Text(sig)
+                            if let bio = settings.displayedProfileBio(for: profile), !bio.isEmpty {
+                                Text(bio)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)

@@ -307,15 +307,21 @@ struct NowPlayingView: View {
         let gap = min(26, max(12, size.height * 0.06))
         let side = min(48, max(24, size.width * 0.05))
         let artworkSize = min(168, max(68, size.height * 0.26))
+        // Reduce the downward offset on short screens to leave room at the bottom.
+        let controlsOffset = min(14, max(0, (size.height - 260) / 5))
         let lyricInset = max(42, size.height * 0.4)
         return HStack(spacing: side) {
             VStack(spacing: gap) {
                 artworkView(size: artworkSize)
-                trackMetaView
-                VStack(spacing: 14) {
-                    NowPlayingScrubber()
-                    landscapeTransportRow
+                    .scaleEffect(1.08)
+                VStack(spacing: gap) {
+                    trackMetaView
+                    VStack(spacing: 14) {
+                        NowPlayingScrubber()
+                        landscapeTransportRow
+                    }
                 }
+                .offset(y: controlsOffset)
             }
             .frame(maxWidth: 380)
             .frame(maxWidth: .infinity)
@@ -1672,10 +1678,8 @@ private struct CompactTrackHeader: View {
             }
         }
         .accessibilityElement(children: .contain)
-        .sheet(isPresented: $showAddToPlaylist) {
-            if let track = player.currentTrack {
-                AddToPlaylistSheet(track: track)
-            }
+        .addToPlaylistPicker(isPresented: $showAddToPlaylist) {
+            player.currentTrack.map { AddToPlaylistSheet(track: $0) }
         }
         .sheet(item: $commentsTrack) { track in
             SongCommentsView(track: track)
@@ -2395,10 +2399,8 @@ private struct MinimalTrackInfoRow: View {
                 }
             }
         }
-        .sheet(isPresented: $showAddToPlaylist) {
-            if let track = player.currentTrack {
-                AddToPlaylistSheet(track: track)
-            }
+        .addToPlaylistPicker(isPresented: $showAddToPlaylist) {
+            player.currentTrack.map { AddToPlaylistSheet(track: $0) }
         }
         .sheet(item: $commentsTrack) { track in
             SongCommentsView(track: track)

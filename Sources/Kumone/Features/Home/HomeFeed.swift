@@ -5,7 +5,7 @@ import Foundation
 /// 板块来自 `/homepage/block/page`，标题与顺序照服务端；这里只做一件事——
 /// 把服务端给的 block 归纳成固定顺序的板块，并剔除「根据你听过的热门节目推荐」
 /// （本项目不展示电台节目板块）。
-enum HomeFeedSlot: Int, CaseIterable {
+enum HomeFeedSlot: String, CaseIterable {
     case recommendedPlaylists      // 推荐歌单
     case recentlyTrending          // 近期云村热播
     case tailoredRecommendation    // 根据…为你推荐
@@ -15,6 +15,23 @@ enum HomeFeedSlot: Int, CaseIterable {
     case regionalHits              // 最近的热门歌曲
     case likedSongRoaming          // 从你喜欢的歌开始漫游
     case likedSongRecommendations  // 根据你喜爱的歌曲推荐
+}
+
+enum HomeSupplement: String {
+    case daily, privateFM, heartbeat, newAlbums, topArtists
+
+    static let shortcuts: [Self] = [.daily, .privateFM, .heartbeat]
+    static let shelves: [Self] = [.newAlbums, .topArtists]
+
+    var title: String {
+        switch self {
+        case .daily: return String(localized: "每日推荐")
+        case .privateFM: return String(localized: "私人漫游")
+        case .heartbeat: return String(localized: "心动模式")
+        case .newAlbums: return String(localized: "新碟上架")
+        case .topArtists: return String(localized: "推荐歌手")
+        }
+    }
 }
 
 struct HomeFeedPlaylist: Identifiable, Hashable {
@@ -61,7 +78,7 @@ struct HomeFeedSection: Identifiable {
     let title: String
     let content: Content
 
-    var id: Int { slot.rawValue }
+    var id: String { slot.rawValue }
 
     var playlists: [HomeFeedPlaylist] {
         if case .playlists(let value) = content { return value }
@@ -75,6 +92,8 @@ struct HomeFeedSection: Identifiable {
 }
 
 enum HomeFeed {
+    static let hiddenSectionsKey = "homeHiddenSections"
+
     /// 服务端的 block → 固定顺序的板块列表。同类板块只取第一个 block（与参考实现一致）。
     static func sections(from blocks: [MusicAPI.HomePageResponse.Block]) -> [HomeFeedSection] {
         var bySlot: [HomeFeedSlot: HomeFeedSection] = [:]
@@ -194,6 +213,6 @@ extension HomeFeed {
         add(.likedSongRoaming, songs: fallbacks.roaming)
         add(.likedSongRecommendations, songs: fallbacks.similar)
 
-        return result.sorted { $0.slot.rawValue < $1.slot.rawValue }
+        return HomeFeedSlot.allCases.compactMap { slot in result.first { $0.slot == slot } }
     }
 }

@@ -32,40 +32,53 @@ struct ListeningRankView: View {
         let key = loadKey
         Group {
             if isLandscape {
-                // 横屏：两档并排，两列以顶上两个按钮的中缝为界，各自滚动。
-                HStack(spacing: 0) {
-                    column(title: "最近一周", records: displayedKey == key ? weekRecords : [], periodWeek: true)
-                    Rectangle()
-                        .fill(Color(.separator))
-                        .frame(width: 0.5)
-                    column(title: "所有时间", records: displayedKey == key ? allRecords : [], periodWeek: false)
+                GeometryReader { geometry in
+                    HStack(spacing: 0) {
+                        column(records: displayedKey == key ? weekRecords : [], periodWeek: true)
+                        Rectangle()
+                            .fill(Color(.separator))
+                            .frame(width: 0.5)
+                        column(records: displayedKey == key ? allRecords : [], periodWeek: false)
+                    }
+                    .toolbar {
+                        ToolbarItem(placement: .principal) {
+                            // Leave room for Back without shifting the headings away from the two columns.
+                            HStack(spacing: geometry.size.width * 0.25) {
+                                periodButton("最近一周", periodWeek: true)
+                                periodButton("所有时间", periodWeek: false)
+                            }
+                            .frame(width: geometry.size.width * 0.75)
+                        }
+                    }
                 }
             } else {
                 portraitBody
             }
         }
-        .navigationTitle("听歌排行")
+        .navigationTitle(isLandscape ? Text(verbatim: "") : Text("听歌排行"))
         .navigationBarTitleDisplayMode(.inline)
+        .progressiveTopBarInLandscape()
         .task(id: key) { await load(key) }
     }
 
-    private func column(title: LocalizedStringKey, records: [PlayRecord], periodWeek: Bool) -> some View {
-        VStack(spacing: 0) {
-            // 这一格就是横屏时"最近一周 / 所有时间"两档按钮各自的那一半：
-            // 两列以这行的中缝为界，按钮面积与列的宽度一一对应。
-            Button {
-                week = periodWeek
-            } label: {
-                Text(title)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(week == periodWeek ? Theme.accent : Color.secondary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 9)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .background(Color(.secondarySystemBackground))
+    private func periodButton(_ title: LocalizedStringKey, periodWeek: Bool) -> some View {
+        Button {
+            week = periodWeek
+        } label: {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(week == periodWeek ? Theme.accent : Color.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .frame(maxWidth: .infinity, minHeight: 32)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(week == periodWeek ? .isSelected : [])
+    }
 
+    private func column(records: [PlayRecord], periodWeek: Bool) -> some View {
+        Group {
             if let visibleError {
                 Text(visibleError).font(.footnote).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 200)
@@ -92,10 +105,12 @@ struct ListeningRankView: View {
                     }
                 }
                 .listStyle(.plain)
+                .compatSymmetricTopEdgeEffect()
                 // 底部迷你播放条浮在内容上，留出它的高度，最后一行不会被压住。
                 .safeAreaInset(edge: .bottom, spacing: 0) { PlayerClearanceSpacer() }
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     private var portraitBody: some View {

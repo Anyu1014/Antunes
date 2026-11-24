@@ -55,6 +55,7 @@ struct SettingsView: View {
     @AppStorage("lyricBarAlignment") private var lyricBarAlignment = "center"
     @AppStorage("tabOrder") private var tabOrder = "home,explore,library,search"
     @AppStorage("startTab") private var startTab = "auto"
+    @AppStorage(HomeFeed.hiddenSectionsKey) private var hiddenHomeSections = ""
     @AppStorage("libraryOrder") private var libraryOrder = "liked,daily,recents,collections,downloads,cloud"
     @AppStorage("libraryShowsCreatedPlaylists") private var libraryShowsCreatedPlaylists = true
     @AppStorage("libraryShowsCollectedPlaylists") private var libraryShowsCollectedPlaylists = true
@@ -70,6 +71,9 @@ struct SettingsView: View {
     #if os(macOS)
     @AppStorage(SettingsManager.Keys.menuBarPlayer) private var showMenuBarPlayer = false
     @State private var navigationPath: [SettingsPage] = []
+    #else
+    @State private var editingProfileBioFor: Int?
+    @State private var profileBioDraft = ""
     #endif
 
     fileprivate enum SettingsPage: Hashable {
@@ -146,6 +150,21 @@ struct SettingsView: View {
         case "cloud": return $libraryShowsCloud
         default: return .constant(true)
         }
+    }
+
+    private func homeSectionToggle(_ title: String, key: String) -> some View {
+        Toggle(title, isOn: Binding(
+            get: { !hiddenHomeSections.split(separator: ",").contains(Substring(key)) },
+            set: { enabled in
+                var hidden = Set(hiddenHomeSections.split(separator: ",").map(String.init))
+                if enabled {
+                    hidden.remove(key)
+                } else {
+                    hidden.insert(key)
+                }
+                hiddenHomeSections = hidden.sorted().joined(separator: ",")
+            }
+        ))
     }
 
     private func tabTitle(_ key: String) -> String {
@@ -308,15 +327,15 @@ struct SettingsView: View {
                 .accessibilityValue(settings.soundEffectPreset.displayName)
                 .accessibilityIdentifier("settingsSoundEffectsButton")
                 #endif
+                #if os(macOS)
                 Toggle("灰色歌曲解锁", isOn: $settings.enableUnblock)
                 Text("无版权或下架歌曲将从已启用音源中匹配播放")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                #endif
             }
             #if os(macOS)
-
             AutoMixSettingsSection()
-            #endif
 
             if settings.enableUnblock {
                 Section {
@@ -336,50 +355,62 @@ struct SettingsView: View {
                     Text("音源")
                 }
             }
+            #endif
 
             #if os(iOS)
-            Section {
-                Toggle("底栏歌词", isOn: $bottomBarLyrics)
-                Picker("底栏歌词对齐", selection: $lyricBarAlignment) {
-                    Text("居左").tag("left")
-                    Text("居中").tag("center")
-                    Text("居右").tag("right")
-                }
-                Toggle("底栏文字", isOn: $showsTabBarLabels)
-                Toggle("我的页搜索按钮", isOn: $librarySearchButton)
-                Picker("冷启动板块", selection: $startTab) {
-                    Text("自动（第一个板块）").tag("auto")
+            Section("板块管理") {
+                DisclosureGroup("主页板块") {
+                    Toggle("底栏歌词", isOn: $bottomBarLyrics)
+                    Picker("底栏歌词对齐", selection: $lyricBarAlignment) {
+                        Text("居左").tag("left")
+                        Text("居中").tag("center")
+                        Text("居右").tag("right")
+                    }
+                    Toggle("底栏文字", isOn: $showsTabBarLabels)
+                    Toggle("我的页搜索按钮", isOn: $librarySearchButton)
+                    Picker("冷启动板块", selection: $startTab) {
+                        Text("自动（第一个板块）").tag("auto")
+                        ForEach(orderedTabs, id: \.self) { tab in
+                            Text(tabTitle(tab)).tag(tab)
+                        }
+                    }
                     ForEach(orderedTabs, id: \.self) { tab in
-                        Text(tabTitle(tab)).tag(tab)
+                        sectionRow(tab)
+                    }
+                    Text("点右侧三个点可移到顶部、上移、下移、移到底部（顺序即底栏从左到右）；只留一项时底栏显示该项图标。「我的」只能在其它四个板块全部关闭后关闭，全部关闭时默认显示「我的」。")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                DisclosureGroup("我的音乐板块") {
+                    ForEach(orderedLibraryRows, id: \.self) { key in
+                        librarySectionRow(key)
+                    }
+                    Text("点右侧三个点可移到顶部、上移、下移、移到底部（顺序即“我的”页里从上到下的顺序）；关掉的项不再出现在“我的”页。")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                DisclosureGroup("主页歌单展示") {
+                    Toggle("展示创建的歌单", isOn: $libraryShowsCreatedPlaylists)
+                    Toggle("展示收藏的歌单", isOn: $libraryShowsCollectedPlaylists)
+                    Toggle("我喜欢的音乐显示在创建的歌单", isOn: $settings.showLikedInCreated)
+                    Text("关掉后“我的”页不再显示对应的歌单分组，歌单本身不会被删除。")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                DisclosureGroup("推荐页板块") {
+                    ForEach(HomeSupplement.shortcuts, id: \.self) { section in
+                        homeSectionToggle(section.title, key: section.rawValue)
+                    }
+                    ForEach(HomeFeedSlot.allCases, id: \.self) { slot in
+                        homeSectionToggle(HomeFeed.defaultTitle(for: slot), key: slot.rawValue)
+                    }
+                    ForEach(HomeSupplement.shelves, id: \.self) { section in
+                        homeSectionToggle(section.title, key: section.rawValue)
                     }
                 }
-                ForEach(orderedTabs, id: \.self) { tab in
-                    sectionRow(tab)
-                }
-            } header: {
-                Text("主页板块")
-            } footer: {
-                Text("点右侧三个点可移到顶部、上移、下移、移到底部（顺序即底栏从左到右）；只留一项时底栏显示该项图标。「我的」只能在其它四个板块全部关闭后关闭，全部关闭时默认显示「我的」。")
-            }
-
-            Section {
-                ForEach(orderedLibraryRows, id: \.self) { key in
-                    librarySectionRow(key)
-                }
-            } header: {
-                Text("我的音乐板块")
-            } footer: {
-                Text("点右侧三个点可移到顶部、上移、下移、移到底部（顺序即“我的”页里从上到下的顺序）；关掉的项不再出现在“我的”页。")
-            }
-
-            Section {
-                Toggle("展示创建的歌单", isOn: $libraryShowsCreatedPlaylists)
-                Toggle("展示收藏的歌单", isOn: $libraryShowsCollectedPlaylists)
-                Toggle("我喜欢的音乐显示在创建的歌单", isOn: $settings.showLikedInCreated)
-            } header: {
-                Text("主页歌单展示")
-            } footer: {
-                Text("关掉后“我的”页不再显示对应的歌单分组，歌单本身不会被删除。")
             }
             #endif
 
@@ -468,6 +499,14 @@ struct SettingsView: View {
             Section("账号") {
                 if let profile = account.profile {
                     LabeledContent("当前账号", value: profile.nickname)
+                    #if os(iOS)
+                    if let userID = account.authenticatedAccountID, userID > 0 {
+                        Button("自定义个人简介") {
+                            profileBioDraft = settings.customProfileBio(for: userID)
+                            editingProfileBioFor = userID
+                        }
+                    }
+                    #endif
                     Button("退出登录", role: .destructive) {
                         Task {
                             do { try await AccountStore.shared.logout() }
@@ -494,6 +533,21 @@ struct SettingsView: View {
 
         }
         .formStyle(.grouped)
+        #if os(iOS)
+        .alert("自定义个人简介", isPresented: Binding(
+            get: { editingProfileBioFor != nil },
+            set: { if !$0 { editingProfileBioFor = nil } }
+        ), presenting: editingProfileBioFor) { userID in
+            TextField("留空使用网易云音乐简介", text: $profileBioDraft)
+            Button("取消", role: .cancel) {}
+            Button("保存") {
+                guard account.authenticatedAccountID == userID else { return }
+                settings.setCustomProfileBio(profileBioDraft, for: userID)
+            }
+        } message: { _ in
+            Text("仅修改本机显示，不会更新网易云音乐上的简介。")
+        }
+        #endif
         #if os(macOS)
         .navigationDestination(for: SettingsPage.self) { page in
             Group {
