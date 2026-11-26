@@ -22,7 +22,7 @@ public struct IOSMainWindow: View {
     @State private var selectedTab: IOSTab = .home
     @State private var lyricsOpen = true
     @AppStorage("bottomBarLyrics") private var bottomBarLyrics = true
-    @AppStorage("tabOrder") private var tabOrder = "home,fm,explore,search,library"
+    @AppStorage("tabOrder") private var tabOrder = "home,explore,fm,search,library"
     @AppStorage("startTab") private var startTab = "library"
 
     /// Returning from the lock screen every few minutes must not rescan

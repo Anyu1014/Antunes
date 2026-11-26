@@ -150,6 +150,7 @@ final class SettingsManager: ObservableObject {
         static let showFM = "settings.showFM"
         static let showLibrary = "settings.showLibrary"
         static let showExplore = "settings.showExplore"
+        static let sectionLayoutMigrated = "settings.sectionLayoutMigrated"
         static let showSearch = "settings.showSearch"
         static let showLikedInCreated = "settings.showLikedInCreatedPlaylists"
         static let searchOffMigrated = "settings.searchOffMigrated"
@@ -543,7 +544,7 @@ final class SettingsManager: ObservableObject {
         let vHome = defaults.object(forKey: Keys.showHome) as? Bool ?? true
         let vFM = defaults.object(forKey: Keys.showFM) as? Bool ?? true
         let vLibrary = defaults.object(forKey: Keys.showLibrary) as? Bool ?? true
-        let vExplore = defaults.object(forKey: Keys.showExplore) as? Bool ?? false
+        let vExplore = defaults.object(forKey: Keys.showExplore) as? Bool ?? true
         showHome = vHome
         showFM = vFM
         showLibrary = vLibrary
@@ -556,6 +557,14 @@ final class SettingsManager: ObservableObject {
         }
         let vSearch = defaults.object(forKey: Keys.showSearch) as? Bool ?? false
         showSearch = vSearch
+        // 新默认排布：推荐 · 精选 · 漫游 · 搜索 · 我的。老安装的键已经写过，
+        // 只改默认值不会生效，所以这里一次性把顺序和「精选」摆正。
+        if defaults.object(forKey: Keys.sectionLayoutMigrated) == nil {
+            defaults.set("home,explore,fm,search,library", forKey: "tabOrder")
+            defaults.set(true, forKey: Keys.showExplore)
+            showExplore = true
+            defaults.set(true, forKey: Keys.sectionLayoutMigrated)
+        }
         // 「我的」是兜底板块：只要还有别的板块开着，它就必须是开的（老数据里可能存成非法组合）。
         if !vLibrary && (vHome || vExplore || vFM || vSearch) { showLibrary = true }
         if defaults.object(forKey: Keys.showLikedInCreatedMigrated) == nil {

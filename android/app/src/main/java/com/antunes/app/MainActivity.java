@@ -206,13 +206,17 @@ public class MainActivity extends Activity {
     synchronized JSONArray downloads() throws Exception{
         JSONArray list=new JSONArray();File dir=new File(getFilesDir(),"audio");File[] files=dir.listFiles((d,name)->name.endsWith(".json"));if(files!=null)for(File f:files){
             if(!new File(dir,f.getName().replace(".json",".audio")).exists())continue;
-            try(InputStream in=new FileInputStream(f)){JSONObject item=new JSONObject(new String(in.readAllBytes(),java.nio.charset.StandardCharsets.UTF_8));item.put("bytes",new File(dir,f.getName().replace(".json",".audio")).length());list.put(item);}
+            try(InputStream in=new FileInputStream(f)){JSONObject item=new JSONObject(new String(in.readAllBytes(),java.nio.charset.StandardCharsets.UTF_8));File audioFile=new File(dir,f.getName().replace(".json",".audio"));
+                item.put("bytes",audioFile.length());
+                if(item.optLong("downloadedAt",0L)<=0L)item.put("downloadedAt",audioFile.lastModified());
+                list.put(item);}
         }return list;
     }
     synchronized JSONObject download(JSONObject track)throws Exception{
         long id=track.getLong("id");if(id<=0)throw new Exception("歌曲无效");
         // 下载走单独的「下载音质」，与播放音质解耦。
-        String url=api.audioURL(id,getSharedPreferences("player",MODE_PRIVATE).getString("download_quality",getSharedPreferences("player",MODE_PRIVATE).getString("quality","exhigh")));
+        String quality=getSharedPreferences("player",MODE_PRIVATE).getString("download_quality",getSharedPreferences("player",MODE_PRIVATE).getString("quality","exhigh"));
+        String url=api.audioURL(id,quality);
         File dir=new File(getFilesDir(),"audio");if(!dir.isDirectory()&&!dir.mkdirs())throw new IOException("下载目录创建失败");
         File tmp=new File(dir,id+".part");HttpURLConnection con=(HttpURLConnection)new URL(url).openConnection();con.setInstanceFollowRedirects(false);con.setConnectTimeout(15000);con.setReadTimeout(30000);
         try{
@@ -222,6 +226,8 @@ public class MainActivity extends Activity {
             try(InputStream in=con.getInputStream();FileOutputStream out=new FileOutputStream(tmp)){byte[] buffer=new byte[32768];int n;while((n=in.read(buffer))!=-1){total+=n;if(total>600L*1024*1024)throw new IOException("音频文件过大");out.write(buffer,0,n);}out.getFD().sync();}
             if(total<1024||(expected>0&&total!=expected))throw new IOException("音频下载不完整");
             File audio=new File(dir,id+".audio");if(!tmp.renameTo(audio))throw new IOException("音频保存失败");
+            track.put("quality",quality);
+            track.put("downloadedAt",System.currentTimeMillis());
             android.util.AtomicFile metadata=new android.util.AtomicFile(new File(dir,id+".json"));FileOutputStream out=metadata.startWrite();
             try{out.write(track.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));metadata.finishWrite(out);}catch(Exception e){metadata.failWrite(out);throw e;}
             return track;

@@ -2,6 +2,25 @@ import SwiftUI
 
 /// A music-library page, using the same rows and layout as Recents and Cloud.
 /// Only explicitly retained downloads belong here; automatic caches stay private.
+/// 「已下载」的排序方式。名称是原有行为，其余三种是新增的。
+enum DownloadSortOrder: String, CaseIterable, Identifiable {
+    case name
+    case size
+    case newest
+    case oldest
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .name: return String(localized: "按名称")
+        case .size: return String(localized: "按大小")
+        case .newest: return String(localized: "从新到旧")
+        case .oldest: return String(localized: "从旧到新")
+        }
+    }
+}
+
 struct DownloadedMusicView: View {
     var collectionID: String?
     @ObservedObject private var downloads = DownloadManager.shared
@@ -13,9 +32,54 @@ struct DownloadedMusicView: View {
     @State private var pendingRemoval: Set<Int> = []
     @State private var removalScope: String?
     @State private var isRemoving = false
+    @AppStorage("downloadSortOrder") private var sortOrderRaw = DownloadSortOrder.name.rawValue
 
     private var collection: DownloadCollection? { downloads.collections.first { $0.id == collectionID } }
-    private var tracks: [Track] { downloads.downloadedSongs(in: collectionID) }
+    private var sortOrder: DownloadSortOrder {
+        DownloadSortOrder(rawValue: sortOrderRaw) ?? .name
+    }
+
+    /// 每首下载的体积、落盘时间与档位，用于排序和行尾标注。
+    private struct DownloadFacts {
+        let bytes: Int64
+        let downloadedAt: Date?
+        let quality: String?
+    }
+
+    private var facts: [Int: DownloadFacts] {
+        var result: [Int: DownloadFacts] = [:]
+        for entry in downloads.downloadedTracks {
+            let assets = entry.assets.filter { !$0.retainedBy.isEmpty || $0.state == .complete }
+            guard !assets.isEmpty else { continue }
+            let rank = AudioQuality.allCases.map(\.rawValue)
+            let best = assets.max { lhs, rhs in
+                let l = rank.firstIndex(of: lhs.descriptor.identity.quality) ?? -1
+                let r = rank.firstIndex(of: rhs.descriptor.identity.quality) ?? -1
+                return l < r
+            }
+            result[entry.id] = DownloadFacts(
+                bytes: assets.reduce(0) { $0 + $1.descriptor.byteCount },
+                downloadedAt: assets.compactMap { $0.verifiedModificationDate ?? $0.lastPlayed }.max(),
+                quality: best?.descriptor.identity.quality
+            )
+        }
+        return result
+    }
+
+    private var tracks: [Track] {
+        let base = downloads.downloadedSongs(in: collectionID)
+        let facts = self.facts
+        switch sortOrder {
+        case .name:
+            return base.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        case .size:
+            return base.sorted { (facts[$0.id]?.bytes ?? 0) > (facts[$1.id]?.bytes ?? 0) }
+        case .newest:
+            return base.sorted { (facts[$0.id]?.downloadedAt ?? .distantPast) > (facts[$1.id]?.downloadedAt ?? .distantPast) }
+        case .oldest:
+            return base.sorted { (facts[$0.id]?.downloadedAt ?? .distantPast) < (facts[$1.id]?.downloadedAt ?? .distantPast) }
+        }
+    }
     private var pendingCount: Int { downloads.pendingJobs.count }
 
     var body: some View {
@@ -55,6 +119,20 @@ struct DownloadedMusicView: View {
         .task { await downloads.start(); await downloads.refreshLibrary() }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
+                Menu {
+                    Picker("排序", selection: $sortOrderRaw) {
+                        ForEach(DownloadSortOrder.allCases) { order in
+                            Text(order.title).tag(order.rawValue)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                } label: {
+                    Image(systemName: "arrow.up.arrow.down")
+                }
+                .disabled(displayed.isEmpty)
+                .accessibilityIdentifier("sort-downloads")
+            }
+            ToolbarItem(placement: .primaryAction) {
                 Button(isSelecting ? String(localized: "完成") : String(localized: "选择")) {
                     selectedIDs = []
                     isSelecting.toggle()
@@ -79,11 +157,19 @@ struct DownloadedMusicView: View {
         } message: { Text("歌曲仍会保留在歌单中。") }
     }
 
-    /// 「已下载」每行右侧显示这首歌占用的磁盘空间。
+    /// 「已下载」每行右侧：占用空间 · 下载档位（档位认不出时只显示空间）。
     private var sizeLabels: [Int: String] {
-        downloads.downloadedBytes.mapValues { value in
-            ByteCountFormatter.string(fromByteCount: value, countStyle: .file)
+        let facts = self.facts
+        var labels: [Int: String] = [:]
+        for (id, bytes) in downloads.downloadedBytes {
+            let size = ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+            if let quality = facts[id]?.quality, let named = AudioQuality(rawValue: quality)?.displayName {
+                labels[id] = "\(size) · \(named)"
+            } else {
+                labels[id] = size
+            }
         }
+        return labels
     }
 
     private func selectionHeader(tracks: [Track]) -> some View {

@@ -277,7 +277,7 @@ function readPreferences(){
   return saved;
 }
 // 音质档位：level 值直接发给 /song/enhance/player/url/v1。
-let prefs={collectionCoverStyle:'classic',glassStyle:'native',tabLabels:false,lyricBar:true,lyricAlignMode:'center',showLibrary:true,startTab:'library',tabOrder:['showHome','showExplore','showSearch','showLibrary'],showHome:true,showExplore:false,showSearch:false,showFM:true,librarySearch:true,libraryOrder:['liked','daily','recents','collections','downloads','cloud'],libLiked:true,libDaily:true,libRecents:true,libCollections:true,libDownloads:true,libCloud:true,appearance:'system',quality:'exhigh',downloadQuality:'exhigh',translation:true,karaoke:true,annotation:'none',ambient:false,ambientIntensity:1,libCreatedLists:true,libCollectedLists:true,showLikedInCreated:false,artworkLink:true,eqEnabled:false,eqBands:Array(10).fill(0),losslessDefault:true,...readPreferences()};
+let prefs={collectionCoverStyle:'classic',glassStyle:'native',tabLabels:false,lyricBar:true,lyricAlignMode:'center',showLibrary:true,startTab:'library',tabOrder:['showHome','showExplore','showFM','showSearch','showLibrary'],showHome:true,showExplore:true,showSearch:false,showFM:true,librarySearch:true,libraryOrder:['liked','daily','recents','collections','downloads','cloud'],libLiked:true,libDaily:true,libRecents:true,libCollections:true,libDownloads:true,libCloud:true,appearance:'system',quality:'exhigh',downloadQuality:'exhigh',downloadSort:'name',translation:true,karaoke:true,annotation:'none',ambient:false,ambientIntensity:1,libCreatedLists:true,libCollectedLists:true,showLikedInCreated:false,artworkLink:true,eqEnabled:false,eqBands:Array(10).fill(0),losslessDefault:true,...readPreferences()};
 let account=null,loggedIn=false,liked=new Set(),downloaded=new Set(),playlists=[],tab=(function(){const list=navigationTabs(prefs);const want=prefs.startTab;return (want&&want!=='auto'&&list.some(([k])=>k===want))?want:list[0][0];})(),route={kind:tab},history=[],renderID=0,overlayKind='',overlayHistory=[],overlayTimer=null;
 let player={queue:[],index:0,playing:false,loading:false,position:0,duration:0,mode:'list',error:''},lastTrackID=0,lyrics=[],translations=[],romaji=[],lyricID=0,activeLine=-1,showLyric=false,lyricsBar=prefs.lyricBar!==false,lyricRAF=0,lyricSync=0,tabsExpanded=false;
 const cache=new Map();let listTracks=[],detail=null,searchQuery='',searchType=1,category='全部',exploreItems=[],exploreOffset=0,exploreMore=false,queryTimer=null;
@@ -565,7 +565,7 @@ async function render(){
       case 'album':case 'artist':content=await detailPage();break;
       case 'daily':if(!loggedIn)content=header(title)+loginPrompt();else{const r=await api('/v3/discovery/recommend/songs');listTracks=uniqueTracks(r.data?.dailySongs||r.recommend||[]);content=header(title)+songPageTools()+tracksHTML(listTracks);}break;
       case 'recents':listTracks=read('recents',[]);content=header(title)+(listTracks.length?songPageTools()+tracksHTML(listTracks):empty('还没有播放记录'));break;
-      case 'downloads':listTracks=(await native('downloads')).map(x=>({...track(x),bytes:x.bytes}));content=header(title,round('gear',openStorage,'存储空间'))+(listTracks.length?songPageTools()+tracksHTML(listTracks):empty('还没有下载歌曲','在歌曲菜单中选择下载，离线时也能播放。','download'));break;
+      case 'downloads':content=await downloadsPage();break;
       case 'cloud':if(!loggedIn)content=header(title)+loginPrompt();else{const r=await api('/cloud/get',{limit:200,offset:0});listTracks=uniqueTracks((r.data||[]).map(x=>x.simpleSong||x));content=header(title)+(listTracks.length?songPageTools()+tracksHTML(listTracks):empty('音乐云盘为空'));}break;
       case 'collections':content=await collectionsPage();break;
       case 'rank':content=await rankPage();break;
@@ -840,8 +840,24 @@ async function explorePage(append=false){
 }
 function trackRow(t,i,items,numbered=false,queue=false){
   const current=t.id===player.queue[player.index]?.id;
-  return `<div class="track-row ${current?'current':''}" data-track-id="${t.id}">${button(`${numbered?`<span class="track-number">${current?icon('music'):i+1}</span>`:cover(t.cover,'track-cover')}<span class="track-info"><strong>${e(t.name)}</strong><small>${t.fee===1?'<span class="vip">VIP</span>':''}${e(t.artist)}${t.album?.name?' · '+e(t.album.name):''}${t.bytes?' · '+sizeText(t.bytes):''}</small></span>`,()=>queue?play(player.queue,i):play(items,i),'track-main',`播放 ${t.name}`)}${round('more',()=>trackMenu(t,i),'歌曲菜单')}</div>`;
+  return `<div class="track-row ${current?'current':''}" data-track-id="${t.id}">${button(`${numbered?`<span class="track-number">${current?icon('music'):i+1}</span>`:cover(t.cover,'track-cover')}<span class="track-info"><strong>${e(t.name)}</strong><small>${t.fee===1?'<span class="vip">VIP</span>':''}${e(t.artist)}${t.album?.name?' · '+e(t.album.name):''}${t.bytes?' · '+sizeText(t.bytes):''}${t.quality?` · ${e(qualityName(t.quality))}`:''}</small></span>`,()=>queue?play(player.queue,i):play(items,i),'track-main',`播放 ${t.name}`)}${round('more',()=>trackMenu(t,i),'歌曲菜单')}</div>`;
 }
+
+const DOWNLOAD_SORTS=[['name','按名称'],['size','按大小'],['newest','从新到旧'],['oldest','从旧到新']];
+async function downloadsPage(){
+  const raw=(await native('downloads')).map(x=>({...track(x),bytes:x.bytes,quality:x.quality||'',downloadedAt:x.downloadedAt||0}));
+  const order=prefs.downloadSort||'name';
+  const sorted=raw.slice().sort((a,b)=>{
+    if(order==='size')return (b.bytes||0)-(a.bytes||0);
+    if(order==='newest')return (b.downloadedAt||0)-(a.downloadedAt||0);
+    if(order==='oldest')return (a.downloadedAt||0)-(b.downloadedAt||0);
+    return String(a.name).localeCompare(String(b.name),'zh-Hans-CN');
+  });
+  const chips=DOWNLOAD_SORTS.map(([k,label])=>button(label,()=>{prefs.downloadSort=k;savePrefs();render();},`chip ${order===k?'active':''}`)).join('');
+  const body=sorted.length?songPageTools()+tracksHTML(sorted):empty('还没有下载歌曲','在歌曲菜单中选择下载，离线时也能播放。','download');
+  return header(route.name||'已下载',round('gear',openStorage,'存储空间'))+`<div class="chip-row download-sort">${chips}</div>`+body;
+}
+function qualityName(q){const hit=(typeof QUALITY_OPTIONS!=='undefined'?QUALITY_OPTIONS:[]).find(x=>x[0]===q);if(hit)return hit[1];return String(q||'').toUpperCase();}
 function tracksHTML(items,numbered=false){if(!items.length)return empty('暂无歌曲');return `<div class="track-list">${items.map((t,i)=>trackRow(t,i,items,numbered)).join('')}</div>`;}
 function playlistOrderKey(id){
   const owner=loggedIn?account?.userId:'guest';
@@ -2239,7 +2255,7 @@ async function boot(){applyTheme();if(!prefs.ambientOffMigrated){prefs.ambient=f
   // 搜索板块改为默认关闭：只在从没迁移过时改一次，之后用户自己开的不会被覆盖。
   // 「我的」只有在其它四个板块都关闭时才允许关闭；老数据里若出现非法组合，启动时纠正。
   if(prefs.showLibrary===false&&!othersAllOff()){prefs.showLibrary=true;write('preferences',prefs);}
-  if(!prefs.searchOffMigrated){prefs.showSearch=false;prefs.searchOffMigrated=true;write('preferences',prefs);}if(!prefs.losslessDefault){prefs.losslessDefault=true;if(prefs.quality==='exhigh')prefs.quality='lossless';savePrefs();}if(!prefs.downloadQuality)prefs.downloadQuality='lossless';try{native('quality',{value:prefs.quality}).catch(()=>{});const status=await native('status');loggedIn=status.loggedIn;const restored=await native('state');player={...player,...restored};player.fm=!!prefs.fm&&!!(player.queue&&player.queue[player.index]);const cur0=player.queue&&player.queue[player.index];if(cur0){loadLyrics(cur0.id);if(player.position>0)control('seek',{value:player.position});}await native('quality',{value:prefs.quality});await native('downloadQuality',{value:prefs.downloadQuality});await native('eq',{bands:prefs.eqBands,enabled:prefs.eqEnabled});try{(await native('downloads')).forEach(t=>downloaded.add(String(t.id)));}catch{}if(loggedIn)loadAccount().then(()=>{if(['library','home','rank','messages','chat'].includes(route.kind))render();}).catch(errorToast);await render();}catch(err){$('#page').innerHTML=header('Antunes')+empty('启动失败',err.message,'wifi',button('重试',boot,'primary'));}}
+  if(!prefs.sectionLayoutMigrated){prefs.tabOrder=['showHome','showExplore','showFM','showSearch','showLibrary'];prefs.showExplore=true;prefs.sectionLayoutMigrated=true;savePrefs();}if(!prefs.searchOffMigrated){prefs.showSearch=false;prefs.searchOffMigrated=true;write('preferences',prefs);}if(!prefs.losslessDefault){prefs.losslessDefault=true;if(prefs.quality==='exhigh')prefs.quality='lossless';savePrefs();}if(!prefs.downloadQuality)prefs.downloadQuality='lossless';try{native('quality',{value:prefs.quality}).catch(()=>{});const status=await native('status');loggedIn=status.loggedIn;const restored=await native('state');player={...player,...restored};player.fm=!!prefs.fm&&!!(player.queue&&player.queue[player.index]);const cur0=player.queue&&player.queue[player.index];if(cur0){loadLyrics(cur0.id);if(player.position>0)control('seek',{value:player.position});}await native('quality',{value:prefs.quality});await native('downloadQuality',{value:prefs.downloadQuality});await native('eq',{bands:prefs.eqBands,enabled:prefs.eqEnabled});try{(await native('downloads')).forEach(t=>downloaded.add(String(t.id)));}catch{}if(loggedIn)loadAccount().then(()=>{if(['library','home','rank','messages','chat'].includes(route.kind))render();}).catch(errorToast);await render();}catch(err){$('#page').innerHTML=header('Antunes')+empty('启动失败',err.message,'wifi',button('重试',boot,'primary'));}}
 boot();
 
 // 顶栏歌单名：等导航条和「播放全部」那行吸附成一块之后才显示，
