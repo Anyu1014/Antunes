@@ -1385,9 +1385,11 @@ final class PlayerService: ObservableObject {
         let scope = offlineAccountScope
         var lease = lease
         if lease == nil, let scope {
+            // 本地优先：只要机器上有这首的下载，就用它，哪怕档位和设置里的不一致
+            // （下载音质与播放音质已经分开设置，用户下过的内容不该被白放着）。
             lease = try? await OfflineStore.shared.acquire(accountScope: scope, trackID: track.id,
                 preferredQuality: SettingsManager.shared.audioQuality.rawValue,
-                allowLowerQuality: anyQuality || !networkState.connected)
+                allowLowerQuality: true)
         }
         guard let lease else { return nil }
         guard generation == resolveGeneration, scope == offlineAccountScope,
