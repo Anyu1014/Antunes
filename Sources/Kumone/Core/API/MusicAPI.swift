@@ -769,7 +769,7 @@ enum MusicAPI {
     static func songDownloadResource(track: Track, level: String, accountScope: String,
                                      client: MusicClient = .shared) async throws -> OfflineAudioResource {
         let data = try await songDownloadURL(id: track.id, level: level, client: client)
-        return try downloadResource(data: data, track: track, accountScope: accountScope)
+        return try downloadResource(data: data, track: track, accountScope: accountScope, requestedQuality: level)
     }
 
     static func songDownloadURL(id: Int, level: String, client: MusicClient = .shared) async throws -> SongURLData {
@@ -781,9 +781,13 @@ enum MusicAPI {
         return data
     }
 
-    static func downloadResource(data: SongURLData, track: Track, accountScope: String) throws -> OfflineAudioResource {
+    static func downloadResource(data: SongURLData, track: Track, accountScope: String,
+                                 requestedQuality: String? = nil) throws -> OfflineAudioResource {
         guard data.id == track.id, data.code == 200, data.freeTrialInfo == nil,
-              let md5 = data.md5?.lowercased(), let quality = data.level,
+              let md5 = data.md5?.lowercased(),
+              // 服务端会把无损以上的档位一律回成 level=lossless，但下载记的是「请求的档位」，
+              // 否则用户在「我的下载」里永远看到无损。
+              let quality = requestedQuality ?? data.level,
               let format = data.type.flatMap({ OfflineAudioFormat(rawValue: $0.lowercased()) }),
               let rawURL = data.url, var components = URLComponents(string: rawURL),
               ["http", "https"].contains(components.scheme?.lowercased() ?? ""),

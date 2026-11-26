@@ -2175,7 +2175,10 @@ function openSleep(){
 }
 function openQualityMenu(){
   const body=QUALITY_OPTIONS.map(([value,label])=>button(`${label}${value===prefs.quality?'<span class="tick">✓</span>':''}`,()=>{
-    savePrefs({quality:value});
+    // savePrefs() 不接收参数（只把 prefs 写回存储），必须先把 prefs.quality 改掉，
+    // 否则设置页仍显示旧档位、胶囊的 ↓ 判断也拿旧值。
+    prefs.quality=value;
+    savePrefs();
     native('quality',{value}).catch(()=>{});
     const at=player.position||0;
     player.quality=value;
