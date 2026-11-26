@@ -857,7 +857,7 @@ async function downloadsPage(){
   const body=sorted.length?songPageTools()+tracksHTML(sorted):empty('还没有下载歌曲','在歌曲菜单中选择下载，离线时也能播放。','download');
   return header(route.name||'已下载',round('gear',openStorage,'存储空间'))+`<div class="chip-row download-sort">${chips}</div>`+body;
 }
-function qualityName(q){const hit=(typeof QUALITY_OPTIONS!=='undefined'?QUALITY_OPTIONS:[]).find(x=>x[0]===q);if(hit)return hit[1];return String(q||'').toUpperCase();}
+function qualityName(q){if(!q)return '';if(q==='local')return '本地';const hit=(typeof QUALITY_OPTIONS!=='undefined'?QUALITY_OPTIONS:[]).find(x=>x[0]===q);if(hit)return hit[1];return String(q).toUpperCase();}
 function tracksHTML(items,numbered=false){if(!items.length)return empty('暂无歌曲');return `<div class="track-list">${items.map((t,i)=>trackRow(t,i,items,numbered)).join('')}</div>`;}
 function playlistOrderKey(id){
   const owner=loggedIn?account?.userId:'guest';

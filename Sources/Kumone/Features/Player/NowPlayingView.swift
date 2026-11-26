@@ -1928,12 +1928,22 @@ private struct CompactQueueContent: View {
                 .foregroundStyle(.white.opacity(0.5))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ScrollView(showsIndicators: false) {
-                    LazyVStack(spacing: 4) {
-                        PlaybackHandoffList()
-                            .padding(.bottom, 4)
-                        ForEach(entries) { entry in
-                            CompactQueueRow(entry: entry)
+                ScrollViewReader { proxy in
+                    ScrollView(showsIndicators: false) {
+                        LazyVStack(spacing: 4) {
+                            PlaybackHandoffList()
+                                .padding(.bottom, 4)
+                            ForEach(entries) { entry in
+                                CompactQueueRow(entry: entry)
+                                    .id(entry.id)
+                            }
+                        }
+                    }
+                    // 打开面板时把正在播的这首摆到列表正中（与竖屏播放列表一致）。
+                    .onAppear {
+                        guard let current = entries.first(where: { $0.isCurrent }) else { return }
+                        DispatchQueue.main.async {
+                            proxy.scrollTo(current.id, anchor: .center)
                         }
                     }
                 }
@@ -2706,7 +2716,11 @@ struct NowPlayingScrubber: View {
     /// 实时显示「实际在播的档位」（`servedQuality`），解析中回落到设置里的档位。
     private var currentQualityName: String {
         let served = player.servedQuality.flatMap(AudioQuality.init(rawValue:))
-        return (served ?? settings.audioQuality.normalized).displayName
+        let name = (served ?? settings.audioQuality.normalized).displayName
+        // 网易云对没有母带/高解析授权的歌会按低一档给地址，这里把「实际比所选低」标出来，
+        // 免得让人以为切换没生效。
+        if let served, served != settings.audioQuality.normalized { return name + " ↓" }
+        return name
     }
 
     private var qualityPicker: some View {

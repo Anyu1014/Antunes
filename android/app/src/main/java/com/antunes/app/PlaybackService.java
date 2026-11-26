@@ -90,8 +90,9 @@ public class PlaybackService extends Service {
             try {
                 String id=""+track.getLong("id");
                 File offline=new File(getFilesDir(), "audio/"+id+".audio");
+                boolean forceNetwork = pendingForceNetwork; pendingForceNetwork = false;
                 String url;
-                if (offline.exists()) { url = offline.getAbsolutePath(); servedQuality = "local"; }
+                if (!forceNetwork && offline.exists()) { url = offline.getAbsolutePath(); servedQuality = "local"; }
                 else { url = api.audioURL(track.getLong("id"),getSharedPreferences("player",MODE_PRIVATE).getString("quality","exhigh")); servedQuality = api.lastResolvedLevel; }
                 handler.post(() -> { if(token!=generation)return;
                   // 这一代要播的必须是队列里这一格，别把上一格的声音接上来。
@@ -139,6 +140,8 @@ public class PlaybackService extends Service {
     String servedQuality = "";
     /** reload 时把播放位置带过来，等 prepared 之后 seek 过去。 */
     long pendingSeekMs = -1;
+    /** reload 来自手动换档位：这一次跳过本地文件，直接按新档位取网络地址。 */
+    boolean pendingForceNetwork = false;
 
     JSONObject state() {
         JSONObject s=new JSONObject();

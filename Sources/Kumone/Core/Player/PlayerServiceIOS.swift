@@ -458,7 +458,8 @@ final class PlayerService: ObservableObject {
     func previous() {
         beginPlaybackIntent()
         if isFMMode { return }
-        if progress > 4 || activeQueue.isEmpty {
+        // 「上一首」就是切到上一首：不再因为已经播了几秒就先回到本曲开头。
+        if activeQueue.isEmpty {
             seek(to: 0)
             return
         }
@@ -778,8 +779,14 @@ final class PlayerService: ObservableObject {
     /// 播放中改音质：按当前位置重新解析并装载，队列/歌词/进度都不丢。
     func reloadCurrentTrackForQualityChange() {
         guard let track = currentTrack else { return }
+        // 用户手动换档位时，本地那份下载（可能正是低一档的「无损」）要让位，
+        // 否则永远播本地文件、胶囊也就永远显示本地那一档。
+        bypassLocalOnce = true
         startPlaying(track, resumeAt: progress)
     }
+
+    /// 下一次解析跳过本地下载/缓存，直接走网络（手动换档位时置 true）。
+    private var bypassLocalOnce = false
 
     private func startPlaying(_ track: Track,
                               localLease: OfflinePlaybackLease? = nil, resumeAt: TimeInterval = 0) {
@@ -843,12 +850,15 @@ final class PlayerService: ObservableObject {
                                 skipsLocalCopies: Bool = false,
                                 resumeAt: TimeInterval = 0) async {
         let quality = SettingsManager.shared.audioQuality.normalized.apiLevel
-        let cacheEnabled = SettingsManager.shared.enableAudioCache && !skipsLocalCopies
+        let bypassLocal = bypassLocalOnce
+        bypassLocalOnce = false
+        let cacheEnabled = SettingsManager.shared.enableAudioCache && !skipsLocalCopies && !bypassLocal
         lastResolveFailure = nil
         lastRefusalCode = nil
 
         // A downloaded copy beats the network, and is all there is without one.
-        if !skipsLocalCopies, let lease = await acquireOfflineLease(for: track, generation: generation, reusing: localLease) {
+        if !skipsLocalCopies, !bypassLocal,
+           let lease = await acquireOfflineLease(for: track, generation: generation, reusing: localLease) {
             await playOfflineFile(lease, for: track, generation: generation, resumeAt: resumeAt)
             return
         }
@@ -925,7 +935,7 @@ final class PlayerService: ObservableObject {
         }
 
         consecutiveFailures = 0
-        servedQuality = data?.level
+        servedQuality = data?.servedQualityLevel
         if data?.freeTrialInfo != nil {
             isTrial = true
             ToastCenter.shared.show(String(localized: "VIP 歌曲，当前为试听片段"))

@@ -344,6 +344,21 @@ struct SongURLData: Decodable, Hashable {
     private enum CodingKeys: String, CodingKey {
         case id, url, br, size, type, level, fee, freeTrialInfo, time, code, md5
     }
+    /// 服务端把无损以上的档位一律回成 `level: "lossless"`，但码率能看出真实情况
+    /// （实测同一首：lossless/hires/jymaster 都是同一个 1.6 Mbps 的 flac）。
+    /// 所以展示用的档位按码率推断，而不是照抄 `level`。
+    var servedQualityLevel: String {
+        let format = (type ?? "").lowercased()
+        if format == "flac" || format == "ape" || format == "wav" {
+            if br >= 1_400_000 { return AudioQuality.hires.apiLevel }
+            if br >= 700_000 { return AudioQuality.lossless.apiLevel }
+            return AudioQuality.exhigh.apiLevel
+        }
+        if br >= 256_000 { return AudioQuality.exhigh.apiLevel }
+        if br >= 160_000 { return AudioQuality.higher.apiLevel }
+        return AudioQuality.standard.apiLevel
+    }
+
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)

@@ -339,7 +339,11 @@ final class MusicApi {
             JSONObject result = request("/song/enhance/player/url/v1", payload);
             JSONObject found = result.getJSONArray("data").getJSONObject(0);
             String url = found.optString("url", "");
-            if (!url.isEmpty() && !url.equals("null")) { lastResolvedLevel = quality; return checkedMediaURL(url); }
+            if (!url.isEmpty() && !url.equals("null")) {
+                // 服务端会把无损以上的档位一律回成 level=lossless，但码率能看出真实档位。
+                lastResolvedLevel = servedLevel(found.optInt("br",0), found.optString("type",""));
+                return checkedMediaURL(url);
+            }
         }
         {
             JSONObject legacy = request("/song/enhance/player/url", new JSONObject().put("ids", "["+id+"]").put("br", 320000));
@@ -348,6 +352,19 @@ final class MusicApi {
             if (!url.isEmpty() && !url.equals("null")) { lastResolvedLevel = "exhigh"; return checkedMediaURL(url); }
         }
         throw new IOException("当前歌曲暂无可播放音源");
+    }
+
+    /** 按码率/格式推断实际拿到的档位（与 iOS 的 SongURLData.servedQualityLevel 同一套阈值）。 */
+    static String servedLevel(int br, String type) {
+        String format = type == null ? "" : type.toLowerCase();
+        if (format.equals("flac") || format.equals("ape") || format.equals("wav")) {
+            if (br >= 1_400_000) return "hires";
+            if (br >= 700_000) return "lossless";
+            return "exhigh";
+        }
+        if (br >= 256_000) return "exhigh";
+        if (br >= 160_000) return "higher";
+        return "standard";
     }
 
     static String checkedMediaURL(String value) throws Exception {

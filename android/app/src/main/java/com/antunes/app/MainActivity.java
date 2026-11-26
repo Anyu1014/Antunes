@@ -161,9 +161,11 @@ public class MainActivity extends Activity {
 
     void control(JSONObject a){
         String action=a.optString("action");
-        if(!Set.of("queue","replaceQueue","toggle","pause","next","previous","seek","mode","sleep","remove").contains(action))return;
+        if(!Set.of("queue","replaceQueue","toggle","pause","next","previous","seek","mode","sleep","remove","reload").contains(action))return;
         Intent intent=new Intent(this,PlaybackService.class).putExtra("action",action).putExtra("value",a.optLong("value",0)).putExtra("mode",a.optString("mode","list"));
         if(action.equals("queue")||action.equals("replaceQueue")){JSONArray q=a.optJSONArray("queue");if(q==null||q.length()==0)return;intent.putExtra("queue",q.toString()).putExtra("index",a.optInt("index",0));}
+        // 手动换档位：这一次跳过本地文件，按新档位重新取网络地址。
+        if(action.equals("reload"))intent.putExtra("force",a.optBoolean("force",true));
         if(PlaybackService.current==null&&!action.equals("queue"))return;
         if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)!=android.content.pm.PackageManager.PERMISSION_GRANTED)requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS},11);
         try{startForegroundService(intent);}catch(Exception e){evaluate("window.dispatchEvent(new CustomEvent('native-error',{detail:'播放服务启动失败'}));");}
