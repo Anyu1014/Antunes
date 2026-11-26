@@ -327,6 +327,9 @@ final class MusicApi {
         return QUALITY_LEVELS.subList(start < 0 ? QUALITY_LEVELS.size() - 2 : start, QUALITY_LEVELS.size());
     }
 
+    /** 上一次 audioURL 实际拿到的档位（阶梯降档后会变），供播放服务展示。 */
+    volatile String lastResolvedLevel = "";
+
     String audioURL(long id, String requestedQuality) throws Exception {
         // 该档拿不到地址时逐档下降；只对「没有 url」降档，拿到地址就用。
         for (String quality : qualityFallbacks(requestedQuality)) {
@@ -336,13 +339,13 @@ final class MusicApi {
             JSONObject result = request("/song/enhance/player/url/v1", payload);
             JSONObject found = result.getJSONArray("data").getJSONObject(0);
             String url = found.optString("url", "");
-            if (!url.isEmpty() && !url.equals("null")) return checkedMediaURL(url);
+            if (!url.isEmpty() && !url.equals("null")) { lastResolvedLevel = quality; return checkedMediaURL(url); }
         }
         {
             JSONObject legacy = request("/song/enhance/player/url", new JSONObject().put("ids", "["+id+"]").put("br", 320000));
             JSONObject found = legacy.getJSONArray("data").getJSONObject(0);
             String url = found.optString("url", "");
-            if (!url.isEmpty() && !url.equals("null")) return checkedMediaURL(url);
+            if (!url.isEmpty() && !url.equals("null")) { lastResolvedLevel = "exhigh"; return checkedMediaURL(url); }
         }
         throw new IOException("当前歌曲暂无可播放音源");
     }

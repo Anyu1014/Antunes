@@ -90,7 +90,9 @@ public class PlaybackService extends Service {
             try {
                 String id=""+track.getLong("id");
                 File offline=new File(getFilesDir(), "audio/"+id+".audio");
-                String url=offline.exists() ? offline.getAbsolutePath() : api.audioURL(track.getLong("id"),getSharedPreferences("player",MODE_PRIVATE).getString("quality","exhigh"));
+                String url;
+                if (offline.exists()) { url = offline.getAbsolutePath(); servedQuality = "local"; }
+                else { url = api.audioURL(track.getLong("id"),getSharedPreferences("player",MODE_PRIVATE).getString("quality","exhigh")); servedQuality = api.lastResolvedLevel; }
                 handler.post(() -> { if(token!=generation)return;
                   // 这一代要播的必须是队列里这一格，别把上一格的声音接上来。
                   JSONObject expect=queue.optJSONObject(index);
@@ -102,7 +104,9 @@ public class PlaybackService extends Service {
                     player.setDataSource(url);
                     // 只认「当前这一台」player 的回调：切歌时旧实例被 release，
                     // 但它挂的回调还会回来，不加这层就会把新实例当成已就绪去 start。
-                    player.setOnPreparedListener(p -> { if(p!=player||token!=generation)return; prepared=true; loading=false; applyEQ(); resume(); });
+                    player.setOnPreparedListener(p -> { if(p!=player||token!=generation)return; prepared=true; loading=false; applyEQ();
+                        if(pendingSeekMs>=0){ try { player.seekTo((int)pendingSeekMs); } catch(Exception ignored){} pendingSeekMs=-1; }
+                        resume(); });
                     player.setOnCompletionListener(p -> { if(p!=player||token!=generation)return; next(1,true); });
                     player.setOnErrorListener((p,what,extra) -> { if(p!=player||token!=generation)return true; prepared=false; loading=false; error="音频播放失败 ("+what+")"; showNotification(); changed(); return true; });
                     player.prepareAsync();
@@ -131,9 +135,14 @@ public class PlaybackService extends Service {
         try { s.put("position",prepared?player.getCurrentPosition():0).put("duration",prepared?player.getDuration():0).put("playing",isPlaying()); } catch(Exception ignored) {}
         return s;
     }
+    /** 当前这首实际用的档位（本地下载时会写 local）。 */
+    String servedQuality = "";
+    /** reload 时把播放位置带过来，等 prepared 之后 seek 过去。 */
+    long pendingSeekMs = -1;
+
     JSONObject state() {
         JSONObject s=new JSONObject();
-        try { s.put("queue",queue).put("index",index).put("playing",isPlaying()).put("loading",loading).put("error",error).put("mode",mode).put("sleepAt",sleepAt).put("position",prepared?player.getCurrentPosition():0).put("duration",prepared?player.getDuration():0); } catch(Exception ignored){}
+        try { s.put("queue",queue).put("index",index).put("playing",isPlaying()).put("loading",loading).put("error",error).put("mode",mode).put("sleepAt",sleepAt).put("position",prepared?player.getCurrentPosition():0).put("duration",prepared?player.getDuration():0).put("quality",servedQuality); } catch(Exception ignored){}
         return s;
     }
     void persist() { int pos=0; try { pos = prepared ? player.getCurrentPosition() : 0; } catch (Exception ignored) {} getSharedPreferences("player",MODE_PRIVATE).edit().putString("queue",queue.toString()).putInt("index",index).putString("mode",mode).putInt("position",pos).apply(); }

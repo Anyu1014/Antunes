@@ -1049,3 +1049,14 @@ body.chrome-hidden #chrome{display:none}
 .playlist-track.reordering{opacity:.6}
 .playlist-track[data-reorder-side=before]{box-shadow:inset 0 2px var(--accent)}
 .playlist-track[data-reorder-side=after]{box-shadow:inset 0 -2px var(--accent)}
+
+/* 播放页进度条下方正中的音质胶囊（点击换档） */
+.np-quality{position:absolute;left:50%;transform:translateX(-50%);display:inline-flex;align-items:center;gap:5px;
+  height:22px;padding:0 9px;border:0;border-radius:11px;background:rgba(255,255,255,.12);color:#fff;
+  font-size:10.5px;font-weight:600;letter-spacing:.2px;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+.np-quality svg{width:12px;height:12px}
+.np-time{position:relative;display:flex;justify-content:space-between;align-items:center}
+.quality-list{display:flex;flex-direction:column}
+.quality-row{display:flex;align-items:center;justify-content:space-between;height:46px;padding:0 4px;
+  background:none;border:0;color:var(--text);font-size:15px;text-align:left}
+.quality-row .tick{color:var(--accent);font-weight:700}
