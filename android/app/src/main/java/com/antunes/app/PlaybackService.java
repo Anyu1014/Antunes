@@ -96,9 +96,11 @@ public class PlaybackService extends Service {
                     player.setWakeMode(this, PowerManager.PARTIAL_WAKE_LOCK);
                     player.setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build());
                     player.setDataSource(url);
-                    player.setOnPreparedListener(p -> { prepared=true; loading=false; applyEQ(); resume(); });
-                    player.setOnCompletionListener(p -> next(1,true));
-                    player.setOnErrorListener((p,what,extra) -> { prepared=false; loading=false; error="音频播放失败 ("+what+")"; showNotification(); changed(); return true; });
+                    // 只认「当前这一台」player 的回调：切歌时旧实例被 release，
+                    // 但它挂的回调还会回来，不加这层就会把新实例当成已就绪去 start。
+                    player.setOnPreparedListener(p -> { if(p!=player||token!=generation)return; prepared=true; loading=false; applyEQ(); resume(); });
+                    player.setOnCompletionListener(p -> { if(p!=player||token!=generation)return; next(1,true); });
+                    player.setOnErrorListener((p,what,extra) -> { if(p!=player||token!=generation)return true; prepared=false; loading=false; error="音频播放失败 ("+what+")"; showNotification(); changed(); return true; });
                     player.prepareAsync();
                 } catch(Exception e) { loading=false; error="音频加载失败"; changed(); } });
             } catch(Exception e) { handler.post(() -> {if(token!=generation)return;loading=false;error=e.getMessage()==null?"歌曲加载失败":e.getMessage();showNotification();changed();}); }

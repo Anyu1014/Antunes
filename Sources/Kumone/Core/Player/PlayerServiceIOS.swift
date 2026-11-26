@@ -297,6 +297,9 @@ final class PlayerService: ObservableObject {
         ) { [weak self] time in
             MainActor.assumeIsolated {
                 guard let self, !self.isScrubbing else { return }
+                // FLAC 分支有自己的时钟；AVPlayer 没有 currentItem 时 time 会停在旧值，
+                // 两个时钟同时写 progress 就是「进度条在两首歌之间闪」。
+                guard self.flacPlayer == nil else { return }
                 let seconds = time.seconds
                 guard seconds.isFinite else { return }
 
@@ -970,6 +973,10 @@ final class PlayerService: ObservableObject {
         do {
             let local = try await FLACFileStore.localCopy(of: remote, trackID: track.id)
             guard generation == resolveGeneration else { return }
+            // 同一时刻只允许一路音源：先把 AVPlayer 那条彻底停掉，
+            // 否则 mp3 还在播、FLAC 又起，就成了两首歌叠在一起。
+            engine.pause()
+            engine.replaceCurrentItem(with: nil)
             stopFLAC()
             let player = FLACFilePlayer()
             try player.load(url: local, startAt: resumeAt, autoplay: false)
@@ -1041,6 +1048,7 @@ final class PlayerService: ObservableObject {
         }
     }
 
+    /// 装载新的网络音源前，先把 FLAC 那条通道停掉（两路音源不能并存）。
     private func loadResolvedURL(
         _ track: Track,
         url: URL,
