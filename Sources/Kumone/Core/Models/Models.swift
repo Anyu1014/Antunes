@@ -49,7 +49,7 @@ struct PlaylistCreator: Codable, Hashable {
 struct PlaylistSummary: Codable, Hashable, Identifiable {
     let id: Int
     let name: String
-    let coverURL: String?
+    var coverURL: String?
     let playCount: Int
     let trackCount: Int
     let updateTime: Int?
@@ -108,9 +108,9 @@ struct TrackIDRef: Codable, Hashable {
 struct PlaylistDetail: Codable, Hashable {
     let id: Int
     let name: String
-    let coverImgUrl: String?
+    var coverImgUrl: String?
     let creator: PlaylistCreator?
-    let description: String?
+    var description: String?
     var trackCount: Int
     let playCount: Int
     let subscribedCount: Int
@@ -535,6 +535,14 @@ extension String {
     func resizedImageURL(_ size: Int) -> URL? {
         guard var components = URLComponents(string: self) else { return nil }
         if components.scheme == "http" { components.scheme = "https" }
+        // Preserve the CDN's raw processing chain (including official artwork overlays).
+        if components.host?.hasSuffix(".music.126.net") == true,
+           let query = components.percentEncodedQuery,
+           query.range(of: "%7CimageView=1", options: .caseInsensitive) != nil,
+           let output = query.range(of: #"thumbnail=\d+y\d+(?!.*thumbnail=)"#, options: .regularExpression) {
+            components.percentEncodedQuery = query.replacingCharacters(in: output, with: "thumbnail=\(size)y\(size)")
+            return components.url
+        }
         // Replacing a previous size keeps the CDN and local decoder in sync;
         // appending a second `param` can leave the original large size active.
         var items = components.queryItems?.filter { $0.name != "param" } ?? []

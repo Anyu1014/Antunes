@@ -1876,6 +1876,7 @@ private struct CompactQueueContent: View {
     @EnvironmentObject private var player: PlayerService
 
     var body: some View {
+        let entries = player.playbackList
         VStack(alignment: .leading, spacing: 15) {
             HStack(spacing: 10) {
                 modeButton(
@@ -1907,16 +1908,16 @@ private struct CompactQueueContent: View {
             }
 
             HStack(alignment: .firstTextBaseline) {
-                Text("继续播放")
+                Text("播放列表")
                     .font(.title3.weight(.bold))
                     .foregroundStyle(.white)
                 Spacer()
-                Text("\(player.upcomingTracks.count) 首")
+                Text("\(entries.count) 首")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.white.opacity(0.46))
             }
 
-            if player.upcomingTracks.isEmpty {
+            if entries.isEmpty {
                 VStack(spacing: 8) {
                     PlaybackHandoffList()
                     Image(systemName: "list.bullet")
@@ -1931,11 +1932,8 @@ private struct CompactQueueContent: View {
                     LazyVStack(spacing: 4) {
                         PlaybackHandoffList()
                             .padding(.bottom, 4)
-                        ForEach(
-                            Array(player.upcomingTracks.prefix(100).enumerated()),
-                            id: \.offset
-                        ) { index, track in
-                            CompactQueueRow(track: track, upcomingIndex: index)
+                        ForEach(entries) { entry in
+                            CompactQueueRow(entry: entry)
                         }
                     }
                 }
@@ -1981,14 +1979,14 @@ private struct CompactQueueContent: View {
 }
 
 private struct CompactQueueRow: View {
-    let track: Track
-    let upcomingIndex: Int
+    let entry: PlaybackQueuePlan.ListEntry
+    private var track: Track { entry.track }
 
     @EnvironmentObject private var player: PlayerService
 
     var body: some View {
         Button {
-            player.jumpToUpcoming(at: upcomingIndex, matching: track.id)
+            player.jumpToPlaylistEntry(entry)
         } label: {
             HStack(spacing: 11) {
                 CachedAsyncImage(url: track.album.picUrl?.resizedImageURL(120), animated: false)
@@ -1998,7 +1996,7 @@ private struct CompactQueueRow: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(track.name)
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.white.opacity(0.9))
+                        .foregroundStyle(entry.isCurrent ? Theme.accent : .white.opacity(0.9))
                         .lineLimit(1)
                     Text(track.artistNames)
                         .font(.caption)
@@ -2008,15 +2006,20 @@ private struct CompactQueueRow: View {
 
                 Spacer(minLength: 4)
 
-                Text(Formatters.duration(track.duration))
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.36))
+                if entry.isCurrent {
+                    PlayingIndicator(animating: player.isPlaying)
+                } else {
+                    Text(Formatters.duration(track.duration))
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.white.opacity(0.36))
+                }
             }
             .padding(.vertical, 4)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(track.name)，\(track.artistNames)")
+        .accessibilityAddTraits(entry.isCurrent ? .isSelected : [])
     }
 }
 
@@ -2635,6 +2638,7 @@ private struct MinimalTransportControls: View {
 
 struct NowPlayingScrubber: View {
     @EnvironmentObject private var player: PlayerService
+    @EnvironmentObject private var settings: SettingsManager
     @ObservedObject private var clock = PlayerService.shared.clock
 
     @State private var isHovering = false
@@ -2694,7 +2698,49 @@ struct NowPlayingScrubber: View {
             }
             .font(.system(size: 10.5).monospacedDigit())
             .foregroundStyle(.white.opacity(0.55))
+            // 进度条正中间那颗音质胶囊：显示正在播的实际档位，点开可换档。
+            .overlay { qualityPicker }
         }
+    }
+
+    /// 实时显示「实际在播的档位」（`servedQuality`），解析中回落到设置里的档位。
+    private var currentQualityName: String {
+        let served = player.servedQuality.flatMap(AudioQuality.init(rawValue:))
+        return (served ?? settings.audioQuality.normalized).displayName
+    }
+
+    private var qualityPicker: some View {
+        Menu {
+            ForEach(AudioQuality.selectable) { quality in
+                Button {
+                    guard settings.audioQuality.normalized != quality else { return }
+                    settings.audioQuality = quality
+                    player.reloadCurrentTrackForQualityChange()
+                } label: {
+                    if settings.audioQuality.normalized == quality {
+                        Label(quality.displayName, systemImage: "checkmark")
+                    } else {
+                        Text(quality.displayName)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "waveform")
+                    .font(.system(size: 9, weight: .semibold))
+                Text(currentQualityName)
+                    .font(.system(size: 10.5, weight: .medium))
+            }
+            .foregroundStyle(.white.opacity(0.72))
+            .padding(.horizontal, 9)
+            .padding(.vertical, 3)
+            .background(.white.opacity(0.12), in: Capsule())
+        }
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .disabled(player.currentTrack == nil)
+        .accessibilityLabel("音质")
+        .accessibilityValue(currentQualityName)
     }
 
     private var thumbDiameter: CGFloat {

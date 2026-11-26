@@ -153,14 +153,9 @@ extension View {
         }
     }
 
-    /// iOS 顶部吸顶条。
-    ///
-    /// 竖屏：整条磨砂，列表从下面滑过时还能透出一点，和安卓端顶栏的
-    /// `backdrop-filter` 同一观感。横屏：不再给顶栏铺底色，只留一层自建的
-    /// 渐进模糊（向下渐隐），按钮位置不变——和安卓端横屏那层遮罩对齐。
-    /// macOS 保持系统工具栏不动。
-    func frostedNavigationBar() -> some View {
-        modifier(TopBarBackground(portraitFrosted: true))
+    /// 竖屏保留整条磨砂，横屏使用系统原生的渐进式滚动边缘。
+    func frostedNavigationBar(isWideLayout: Bool = false) -> some View {
+        modifier(TopBarBackground(isWideLayout: isWideLayout))
     }
 
     /// 横屏顶栏：一律交给系统原生导航栏（那块玻璃由系统自己画），不再自建渐隐层；
@@ -236,18 +231,21 @@ private struct LandscapeTopEdgeEffect: ViewModifier {
     }
 }
 
-struct TopBarBackground: ViewModifier {
-    /// 是否给导航栏铺一层整条磨砂。
-    var portraitFrosted: Bool
+private struct TopBarBackground: ViewModifier {
+    let isWideLayout: Bool
+    @Environment(\.isLandscapeWindow) private var isLandscapeWindow
 
     func body(content: Content) -> some View {
         #if os(iOS)
-        if portraitFrosted {
+        let isLandscape = isLandscapeWindow || isWideLayout
+        if isLandscape {
+            content
+                .toolbarBackground(.hidden, for: .navigationBar)
+                .compatSymmetricTopEdgeEffect()
+        } else {
             content
                 .toolbarBackground(.visible, for: .navigationBar)
                 .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
-        } else {
-            content
         }
         #else
         content

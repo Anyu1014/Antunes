@@ -20,6 +20,7 @@ final class ExploreViewModel: ObservableObject {
     private var offset = 0
     private var highQualityBefore = 0
     private var loadTask: Task<Void, Never>?
+    private var loadVersion = 0
 
     func select(_ category: String) {
         guard category != selectedCategory || playlists.isEmpty else { return }
@@ -29,27 +30,34 @@ final class ExploreViewModel: ObservableObject {
         highQualityBefore = 0
         hasMore = true
         loadTask?.cancel()
+        loadVersion += 1
+        isLoading = false
         loadTask = Task { await loadMore() }
     }
 
     func loadMore() async {
         guard !isLoading, hasMore else { return }
+        let version = loadVersion
+        let category = selectedCategory
+        func isCurrent() -> Bool { version == loadVersion && !Task.isCancelled }
         isLoading = true
-        defer { isLoading = false }
+        defer { if version == loadVersion { isLoading = false } }
 
-        switch selectedCategory {
+        switch category {
         case "排行榜":
-            if let lists = try? await MusicAPI.toplists() {
-                toplists = lists
-            }
+            let lists = try? await MusicAPI.toplists()
+            guard isCurrent() else { return }
+            if let lists { toplists = lists }
             hasMore = false
         case "推荐歌单":
-            if let result = try? await MusicAPI.personalizedPlaylists(limit: 100) {
-                playlists = result
-            }
+            let result = try? await MusicAPI.personalizedPlaylists(limit: 100)
+            guard isCurrent() else { return }
+            if let result { playlists = result }
             hasMore = false
         case "精品歌单":
-            if let result = try? await MusicAPI.highQualityPlaylists(before: highQualityBefore) {
+            let result = try? await MusicAPI.highQualityPlaylists(before: highQualityBefore)
+            guard isCurrent() else { return }
+            if let result {
                 let existing = Set(playlists.map(\.id))
                 playlists += result.playlists.filter { !existing.contains($0.id) }
                 highQualityBefore = result.lasttime ?? 0
@@ -58,10 +66,9 @@ final class ExploreViewModel: ObservableObject {
                 hasMore = false
             }
         default:
-            let cat = selectedCategory == "官方" ? "官方" : selectedCategory
-            if let result = try? await MusicAPI.topPlaylists(
-                category: cat == "全部" ? "全部" : cat, offset: offset
-            ) {
+            let result = try? await MusicAPI.topPlaylists(category: category, offset: offset)
+            guard isCurrent() else { return }
+            if let result {
                 let existing = Set(playlists.map(\.id))
                 playlists += result.playlists.filter { !existing.contains($0.id) }
                 offset += 50
@@ -91,7 +98,7 @@ struct ExploreView: View {
                         ForEach(Array(model.playlists.enumerated()), id: \.element.id) { index, playlist in
                             NavigationLink(value: Destination.playlist(playlist.id)) {
                                 CoverCardBody(
-                                    coverURL: playlist.coverURL?.resizedImageURL(384),
+                                    coverURL: playlist.coverURL?.resizedImageURL(576),
                                     title: playlist.name,
                                     playCount: playlist.playCount
                                 ) {

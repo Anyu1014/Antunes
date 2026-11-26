@@ -7,25 +7,16 @@ struct IOSPlaybackQueueView: View {
     @EnvironmentObject private var toasts: ToastCenter
 
     var body: some View {
+        let entries = player.playbackList
         NavigationStack {
             ScrollView(showsIndicators: false) {
                 LazyVStack(alignment: .leading, spacing: 2) {
                     PlaybackHandoffList()
                         .padding(.horizontal, 8)
                         .padding(.vertical, 8)
-                    if let current = player.currentTrack {
-                        PlaybackQueueSectionLabel("正在播放")
-                        PlaybackQueueRow(track: current, isCurrent: true)
-
-                        if !player.upcomingTracks.isEmpty {
-                            PlaybackQueueSectionLabel("即将播放")
-                                .padding(.top, 10)
-                            ForEach(
-                                Array(player.upcomingTracks.prefix(100).enumerated()),
-                                id: \.offset
-                            ) { index, track in
-                                PlaybackQueueRow(track: track, isCurrent: false, upcomingIndex: index)
-                            }
+                    if !entries.isEmpty {
+                        ForEach(entries) { entry in
+                            PlaybackQueueRow(entry: entry)
                         }
                     } else {
                         VStack(spacing: 8) {
@@ -40,11 +31,11 @@ struct IOSPlaybackQueueView: View {
                 }
                 .padding(10)
             }
-            .navigationTitle("播放队列")
+            .navigationTitle("播放列表")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Text("\(player.upcomingTracks.count + (player.hasCurrentTrack ? 1 : 0)) 首")
+                    Text("\(entries.count) 首")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -72,34 +63,15 @@ struct IOSPlaybackQueueView: View {
     }
 }
 
-private struct PlaybackQueueSectionLabel: View {
-    let text: LocalizedStringKey
-
-    init(_ text: LocalizedStringKey) {
-        self.text = text
-    }
-
-    var body: some View {
-        Text(text)
-            .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-    }
-}
-
 private struct PlaybackQueueRow: View {
-    let track: Track
-    let isCurrent: Bool
-    var upcomingIndex: Int? = nil
+    let entry: PlaybackQueuePlan.ListEntry
+    private var track: Track { entry.track }
 
     @EnvironmentObject private var player: PlayerService
 
     var body: some View {
         Button {
-            guard !isCurrent else { return }
-            if let upcomingIndex { player.jumpToUpcoming(at: upcomingIndex, matching: track.id) }
-            else { player.jumpTo(track) }
+            player.jumpToPlaylistEntry(entry)
         } label: {
             HStack(spacing: 10) {
                 CachedAsyncImage(url: track.album.picUrl?.resizedImageURL(96), animated: false)
@@ -109,7 +81,7 @@ private struct PlaybackQueueRow: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(track.name)
                         .font(.system(size: 12.5, weight: .medium))
-                        .foregroundStyle(isCurrent ? Theme.accent : .primary)
+                        .foregroundStyle(entry.isCurrent ? Theme.accent : .primary)
                         .lineLimit(1)
                     Text(track.artistNames)
                         .font(.system(size: 11))
@@ -119,7 +91,7 @@ private struct PlaybackQueueRow: View {
 
                 Spacer(minLength: 0)
 
-                if isCurrent {
+                if entry.isCurrent {
                     PlayingIndicator(animating: player.isPlaying)
                 } else {
                     Text(Formatters.duration(track.duration))
@@ -132,6 +104,7 @@ private struct PlaybackQueueRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(entry.isCurrent ? .isSelected : [])
     }
 }
 #endif

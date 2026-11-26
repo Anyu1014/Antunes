@@ -10,6 +10,11 @@ struct AlbumDetailView: View {
     @State private var isLoading = true
     @State private var errorMessage: String?
     @State private var showFullDescription = false
+    #if os(iOS)
+    private var coverPreference = CollectionCoverPreference()
+    @State private var showGradientSearch = false
+    @State private var gradientQuery = ""
+    #endif
     @State private var loadGeneration = 0
     @ObservedObject private var downloads = DownloadManager.shared
 
@@ -57,14 +62,19 @@ struct AlbumDetailView: View {
     private var onlineContent: some View {
         #if os(iOS)
         GeometryReader { geo in
-            if HomeView.splitsLandscape(geo.size) {
+            let coverStyle = coverPreference.style(landscape: geo.size.width > geo.size.height)
+            if let style = CollectionGradientStyle(rawValue: coverStyle), let album {
+                gradientContent(album, width: geo.size.width, style: style,
+                                landscapeLeftWidth: HomeView.splitsLandscape(geo.size) ? leftColumnWidth(geo.size.width) : nil)
+            } else if HomeView.splitsLandscape(geo.size) {
                 landscapeContents(width: geo.size.width)
+                    .frostedNavigationBar(isWideLayout: true)
             } else {
                 portraitContents
+                    .frostedNavigationBar()
             }
         }
         .navigationBarTitleDisplayMode(.inline)
-        .frostedNavigationBar()
         .background(Platform.windowBackgroundColor.ignoresSafeArea())
         #else
         portraitContents
@@ -87,39 +97,104 @@ struct AlbumDetailView: View {
                     .frame(minHeight: 400)
             }
         } rows: { layout in
-            TrackListView(tracks: tracks, source: .album(albumID),
-                          context: album.map { .album(id: albumID, name: $0.name) }, layout: layout)
-                .padding(.horizontal, isCompact ? 6 : Theme.Layout.contentInset - 10)
+            albumTrackRows(tracks, layout: layout)
         } footer: {
-            VStack(alignment: .leading, spacing: isCompact ? 16 : 20) {
-                if !otherAlbums.isEmpty {
-                    SectionHeader(title: "该歌手的其他专辑")
-                        .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
-                        .padding(.top, 12)
+            albumTrackFooter
+        }
+    }
 
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 16) {
-                            Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
-                            ForEach(otherAlbums) { item in
-                                NavigationLink(value: Destination.album(item.id)) {
-                                    CoverCardBody(
-                                        coverURL: item.picUrl?.resizedImageURL(384),
-                                        title: item.name,
-                                        subtitle: Formatters.date(fromMS: item.publishTime)
-                                    )
-                                }
-                                .buttonStyle(.interactiveCard)
+    private func albumTrackRows(_ visible: [Track], layout: TrackListView.Layout = .stack, queue: [Track]? = nil) -> some View {
+        TrackListView(tracks: visible, source: .album(albumID),
+                      context: album.map { .album(id: albumID, name: $0.name) }, layout: layout, queue: queue)
+            .padding(.horizontal, isCompact ? 6 : Theme.Layout.contentInset - 10)
+    }
+
+    private var albumTrackFooter: some View {
+        VStack(alignment: .leading, spacing: isCompact ? 16 : 20) {
+            if !otherAlbums.isEmpty {
+                SectionHeader(title: "该歌手的其他专辑")
+                    .padding(.horizontal, isCompact ? 16 : Theme.Layout.contentInset)
+                    .padding(.top, 12)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 16) {
+                        Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
+                        ForEach(otherAlbums) { item in
+                            NavigationLink(value: Destination.album(item.id)) {
+                                CoverCardBody(
+                                    coverURL: item.picUrl?.resizedImageURL(384),
+                                    title: item.name,
+                                    subtitle: Formatters.date(fromMS: item.publishTime)
+                                )
                             }
-                            Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
+                            .buttonStyle(.interactiveCard)
                         }
+                        Spacer().frame(width: (isCompact ? 16 : Theme.Layout.contentInset) - 16)
                     }
                 }
-                PlayerClearanceSpacer()
             }
+            PlayerClearanceSpacer()
         }
     }
 
     #if os(iOS)
+    private func gradientContent(_ album: AlbumDetail, width: CGFloat, style: CollectionGradientStyle, landscapeLeftWidth: CGFloat?) -> some View {
+        let query = gradientQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        let visible = query.isEmpty ? tracks : tracks.filter {
+            "\($0.name) \($0.artistNames)".localizedCaseInsensitiveContains(query)
+        }
+        return ScrollViewReader { proxy in
+            let search = {
+                showGradientSearch.toggle()
+                if showGradientSearch {
+                    withAnimation(AppAnimation.standard) { proxy.scrollTo("albumTrackList", anchor: .top) }
+                } else {
+                    gradientQuery = ""
+                }
+            }
+            GradientCollectionPage(
+                width: width, landscapeLeftWidth: landscapeLeftWidth, coverURL: album.picUrl?.resizedImageURL(960),
+                style: style,
+                title: album.name, author: album.artist?.name,
+                authorLink: album.artist.map { .artist($0.id) },
+                description: album.description,
+                isFavorite: isSubscribed, canPlay: !tracks.isEmpty,
+                play: { player.play(tracks: tracks, source: .album(albumID), context: .album(id: albumID, name: album.name)) },
+                favorite: account.isLoggedIn ? { toggleSubscribe() } : nil,
+                searchLabel: "在专辑内查找", search: search
+            ) {
+                HStack(spacing: 10) {
+                    Text("\(tracks.count) 首 · \(Formatters.date(fromMS: album.publishTime))")
+                        .font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                    Spacer(minLength: 4)
+                    DownloadCollectionButton(tracks: tracks, owner: "album:\(albumID)", name: album.name, compact: true)
+                }
+                .padding(.vertical, 8)
+            } rows: {
+                VStack(spacing: isCompact ? 16 : 20) {
+                    if showGradientSearch {
+                        TextField("搜索专辑内歌曲", text: $gradientQuery)
+                            .textFieldStyle(.roundedBorder).padding(.horizontal, 16)
+                    }
+                    albumTrackRows(visible, queue: query.isEmpty ? nil : tracks)
+                    albumTrackFooter
+                }
+                .id("albumTrackList")
+            }
+            .toolbar {
+                if landscapeLeftWidth == nil {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button(action: search) {
+                            Label("在专辑内查找", systemImage: "magnifyingglass")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func leftColumnWidth(_ width: CGFloat) -> CGFloat { max(240, min(420, width * 0.42)) }
+
     /// 横屏：左栏封面/信息，右栏曲目，两栏各自滚动。
     @ViewBuilder private func landscapeContents(width: CGFloat) -> some View {
         HStack(alignment: .top, spacing: 0) {
@@ -157,7 +232,8 @@ struct AlbumDetailView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .scrollIndicators(.hidden)
-            .frame(width: max(240, min(420, width * 0.42)))
+            .compatSymmetricTopEdgeEffect()
+            .frame(width: leftColumnWidth(width))
 
             Divider().opacity(0.3)
 
@@ -170,6 +246,7 @@ struct AlbumDetailView: View {
             } footer: {
                 PlayerClearanceSpacer()
             }
+            .compatSymmetricTopEdgeEffect()
         }
     }
     #endif

@@ -2,6 +2,7 @@ package com.antunes.app;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.graphics.BitmapFactory;
 import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyProperties;
 import android.util.Base64;
@@ -23,6 +24,7 @@ final class MusicApi {
     private final SharedPreferences prefs;
     private JSONObject cookies;
     private long epoch = 0;
+    static final int MAX_COVER_BYTES = 768 * 1024;
     private static final Set<String> PATHS = Set.of(
         "/personalized/playlist", "/v1/discovery/recommend/resource", "/v3/discovery/recommend/songs",
         "/homepage/block/page",
@@ -34,7 +36,7 @@ final class MusicApi {
         "/song/enhance/player/url/v1", "/song/enhance/player/url", "/song/enhance/download/url/v1", "/song/lyric/v1", "/song/lyric",
         "/login/qrcode/unikey", "/login/qrcode/client/login", "/nuser/account/get", "/login/token/refresh",
         "/sms/captcha/sent", "/w/login/cellphone", "/logout", "/user/playlist", "/song/like/get",         "/album/sublist", "/artist/sublist", "/playmode/intelligence/list",
-        "/playlist/create", "/playlist/remove", "/playlist/subscribe", "/playlist/unsubscribe", "/playlist/manipulate/tracks",
+        "/playlist/create", "/playlist/desc/update", "/playlist/remove", "/playlist/subscribe", "/playlist/unsubscribe", "/playlist/manipulate/tracks",
         "/album/sub", "/album/unsub", "/artist/sub", "/artist/unsub", "/v1/discovery/simiSong",
         "/v1/radio/get", "/radio/trash/add", "/v1/play/record", "/msg/private/users", "/msg/private/history", "/msg/private/send",
         "/v1/comment/like", "/v1/comment/unlike", "/cloud/get", "/cloud/del", "/play-record/song/list", "/feedback/weblog");
@@ -104,22 +106,171 @@ final class MusicApi {
         JSONObject jar; long generation;
         synchronized (this) {
             // A queued private request must not inherit a newly logged-in account.
-            if (path.startsWith("/msg/private/") && submittedSession != epoch) {
+            String bare = path.split("[?#]")[0];
+            boolean editing = bare.equals("/playlist/desc/update"), deleting = bare.equals("/playlist/remove");
+            if ((path.startsWith("/msg/private/") || editing || deleting) && submittedSession != epoch) {
                 throw new IOException("登录状态已改变，请重试");
+            }
+            if ((editing || deleting) && !loggedIn()) throw new IOException("需要登录");
+            if (editing) {
+                if (payload.optLong("id") <= 0 || !(payload.opt("desc") instanceof String value) || value.length() > 1000)
+                    throw new IOException("歌单简介无效");
             }
             jar = new JSONObject(cookies.toString());
             generation = epoch;
         }
         return transport(path, payload, jar, generation);
     }
+    private synchronized JSONObject playlistCredentials(long submittedSession) throws Exception {
+        if (submittedSession != epoch) throw new IOException("登录状态已改变，请重试");
+        if (!loggedIn()) throw new IOException("需要登录");
+        return new JSONObject(cookies.toString());
+    }
+
+    String updatePlaylistCover(long id, String encoded, long submittedSession) throws Exception {
+        if (id <= 0 || encoded.length() > MAX_COVER_BYTES * 4 / 3 + 4) throw new IOException("封面图片无效");
+        byte[] jpeg = Base64.decode(encoded, Base64.NO_WRAP);
+        BitmapFactory.Options bounds = new BitmapFactory.Options();
+        bounds.inJustDecodeBounds = true;
+        BitmapFactory.decodeByteArray(jpeg, 0, jpeg.length, bounds);
+        if (jpeg.length > MAX_COVER_BYTES || !"image/jpeg".equals(bounds.outMimeType)
+                || bounds.outWidth < 1 || bounds.outWidth != bounds.outHeight || bounds.outWidth > 640)
+            throw new IOException("封面图片无效");
+
+        String key, token;
+        Object coverId;
+        try {
+            JSONObject allocPayload = new JSONObject()
+                    .put("bucket", "yyimgs").put("ext", "jpg").put("filename", "playlist.jpg")
+                    .put("local", false).put("nos_product", 0).put("type", "other")
+                    .put("return_body", "{\"code\":200,\"size\":\"$(ObjectSize)\"}");
+            // eapi 优先：token 与 App 通道的登录态同源；拿不到再走 weapi。
+            // eapi 与 weapi 都可能下发 token；只认纯 ASCII、非空的，哪条能给就用哪条。
+            JSONObject slot = null;
+            String slotToken = null, slotKey = null;
+            Object slotId = null;
+            String[][] attempts = {{"eapi", "1"}, {"weapi", "0"}};
+            for (String[] attempt : attempts) {
+                boolean asEapi = "1".equals(attempt[1]);
+                try {
+                    JSONObject raw = asEapi
+                            ? transport("/nos/token/alloc", allocPayload, playlistCredentials(submittedSession), submittedSession, true)
+                            : transport("/nos/token/alloc", allocPayload, playlistCredentials(submittedSession), submittedSession);
+                    JSONObject candidate = raw.getJSONObject("result");
+                    String candidateToken = candidate.optString("token", "").replaceAll("[\\r\\n]", "").trim();
+                    Object candidateId = candidate.opt("docId");
+                    // NOS token 是「两段用空格连起来」的形态，允许中间出现空格，但首尾不行。
+                    boolean tokenOk = candidateToken.matches("[!-~](?:[ -~]{0,4094}[!-~])?");
+                    boolean idOk = candidateId != null && candidateId.toString().matches("[0-9]{1,24}");
+                    Log.i("MusicApi", "cover alloc " + attempt[0] + " ok=" + (tokenOk && idOk));
+                    if (tokenOk && idOk) { slot = candidate; slotToken = candidateToken; slotId = candidateId; break; }
+                } catch (Exception attemptFailure) {
+                    Log.w("MusicApi", "cover alloc " + attempt[0] + " failed: " + attemptFailure);
+                }
+            }
+            if (slot == null) throw new IOException("封面上传凭证无效");
+            key = playlistCoverPath(slot.getString("objectKey"));
+            token = slotToken;
+            coverId = slotId;
+        } catch (Exception e) {
+            Log.w("MusicApi", "cover alloc failed: " + e, e);
+            playlistCredentials(submittedSession);
+            throw new IOException("获取封面上传凭证失败，请重试", e);
+        }
+        playlistCredentials(submittedSession);
+        String uploadHost = nosUploadHost("yyimgs");
+        Log.i("MusicApi", "cover upload host=" + uploadHost + " bytes=" + jpeg.length);
+        HttpURLConnection upload = (HttpURLConnection) new URL(uploadHost + "/yyimgs/" + key + "?offset=0&complete=true&version=1.0").openConnection();
+        try {
+            // 上传机常把请求转到真正的存储节点，禁跳转会被判成失败。
+            upload.setInstanceFollowRedirects(true);
+            upload.setConnectTimeout(15000);
+            upload.setReadTimeout(20000);
+            upload.setRequestMethod("POST");
+            upload.setDoOutput(true);
+            upload.setFixedLengthStreamingMode(jpeg.length);
+            upload.setRequestProperty("x-nos-token", token);
+            upload.setRequestProperty("Content-Type", "image/jpeg");
+            try (OutputStream out = upload.getOutputStream()) { out.write(jpeg); }
+            int uploadStatus = upload.getResponseCode();
+            Log.i("MusicApi", "cover upload status=" + uploadStatus);
+            if (uploadStatus < 200 || uploadStatus >= 400) throw new IOException("NOS response " + uploadStatus);
+        } catch (IOException e) {
+            Log.w("MusicApi", "cover upload failed: " + e.getMessage(), e);
+            playlistCredentials(submittedSession);
+            throw new IOException("图片上传失败，请重试", e);
+        } finally { upload.disconnect(); }
+        JSONObject result;
+        try {
+            result = transport("/playlist/cover/update", new JSONObject().put("id", id).put("coverImgId", coverId),
+                    playlistCredentials(submittedSession), submittedSession);
+        } catch (Exception e) {
+            playlistCredentials(submittedSession);
+            throw new IOException("更新歌单封面失败，请重试", e);
+        }
+        String url = result.optString("url").replaceFirst("^http:", "https:");
+        if (url.matches("https://[A-Za-z0-9-]+\\.music\\.126\\.net/[^\\s]+")) return url;
+        return "https://p1.music.126.net/" + key;
+    }
+
+    // NOS 上传域名由 LBS 下发，nosup-hz1 只是兜底。
+    private static String nosUploadHost(String bucket) {
+        String fallback = "https://nosup-hz1.127.net";
+        HttpURLConnection con = null;
+        try {
+            con = (HttpURLConnection) new URL("https://wanproxy.127.net/lbs?version=1.0&bucketname=" + bucket).openConnection();
+            con.setConnectTimeout(5000);
+            con.setReadTimeout(5000);
+            if (con.getResponseCode() != 200) return fallback;
+            java.io.ByteArrayOutputStream buffer = new java.io.ByteArrayOutputStream();
+            try (java.io.InputStream in = con.getInputStream()) {
+                byte[] chunk = new byte[4096];
+                int read;
+                while ((read = in.read(chunk)) > 0) buffer.write(chunk, 0, read);
+            }
+            JSONArray hosts = new JSONObject(buffer.toString("UTF-8")).optJSONArray("upload");
+            if (hosts == null || hosts.length() == 0) return fallback;
+            String host = hosts.optString(0, "").trim().replaceAll("/+$", "");
+            if (host.isEmpty()) return fallback;
+            // LBS 常下发 http://，Android 默认拦明文；统一升到 https（同一台机器 443 可用）。
+            host = host.replaceFirst("^http://", "https://");
+            return host.startsWith("https://") ? host : "https://" + host;
+        } catch (Exception e) {
+            return fallback;
+        } finally {
+            if (con != null) con.disconnect();
+        }
+    }
+
+    private static String playlistCoverPath(String key) throws IOException {
+        if (key.isEmpty() || key.getBytes(StandardCharsets.UTF_8).length > 512) throw new IOException("无效图片路径");
+        String relative = key.startsWith("/") ? key.substring(1) : key;
+        StringJoiner path = new StringJoiner("/");
+        for (String part : relative.split("/", -1)) {
+            if (part.isEmpty() || part.equals(".") || part.equals("..")) throw new IOException("无效图片路径");
+            path.add(URLEncoder.encode(part, "UTF-8").replace("+", "%20").replace("*", "%2A").replace("%7E", "~"));
+        }
+        return path.toString();
+    }
+
     private JSONObject transport(String path, JSONObject payload, JSONObject jar, long generation) throws Exception {
+        return transport(path, payload, jar, generation, false);
+    }
+
+    private JSONObject transport(String path, JSONObject payload, JSONObject jar, long generation, boolean forceEapi) throws Exception {
         boolean plain = Set.of("/sms/captcha/sent", "/w/login/cellphone", "/artist/sub", "/artist/unsub").contains(path);
-        String host = plain ? "music.163.com" : "interface.music.163.com";
+        boolean webEncrypted = !forceEapi && (path.equals("/nos/token/alloc") || path.equals("/playlist/cover/update"));
+        boolean web = plain || webEncrypted;
+        String host = web ? "music.163.com" : "interface.music.163.com";
         boolean media = path.startsWith("/song/enhance/");
         JSONObject header = new JSONObject().put("osver", "Microsoft-Windows-10-Professional-build-19045-64bit").put("deviceId", prefs.getString("device", "")).put("os", "pc").put("appver", media ? "2.9.7" : "3.1.17.204416").put("versioncode", media ? "100" : "140").put("mobilename", "").put("buildver", "" + System.currentTimeMillis()/1000).put("resolution", "1920x1080").put("channel", "netease").put("requestId", System.currentTimeMillis()+"_"+new SecureRandom().nextInt(10000)).put("__csrf", jar.optString("__csrf"));
         for (Iterator<String> keys = jar.keys(); keys.hasNext();) { String k = keys.next(); header.put(k, jar.get(k)); }
         String body;
-        if (plain) {
+        if (webEncrypted) {
+            payload.put("csrf_token", jar.optString("__csrf")).put("e_r", false);
+            Map<String, String> form = RequestCrypto.weapi(payload.toString());
+            body = "params=" + URLEncoder.encode(form.get("params"), "UTF-8") + "&encSecKey=" + form.get("encSecKey");
+        } else if (plain) {
             StringJoiner fields = new StringJoiner("&");
             for (Iterator<String> keys = payload.keys(); keys.hasNext();) { String k = keys.next(); fields.add(URLEncoder.encode(k, "UTF-8")+"="+URLEncoder.encode(payload.get(k).toString(), "UTF-8")); }
             body = fields.toString();
@@ -127,11 +278,11 @@ final class MusicApi {
             payload.put("header", header).put("e_r", false);
             body = "params=" + RequestCrypto.encrypt("/api" + path, payload.toString());
         }
-        HttpURLConnection con = (HttpURLConnection) new URL("https://"+host+(plain?"/api":"/eapi")+path).openConnection();
+        HttpURLConnection con = (HttpURLConnection) new URL("https://"+host+(webEncrypted?"/weapi":plain?"/api":"/eapi")+path).openConnection();
         con.setInstanceFollowRedirects(false); con.setConnectTimeout(15000); con.setReadTimeout(20000); con.setRequestMethod("POST"); con.setDoOutput(true);
         con.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
         con.setRequestProperty("Referer", "https://music.163.com");
-        con.setRequestProperty("User-Agent", plain ? "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/17.0 Safari/605.1.15" : "NeteaseMusic 9.0.90/5038 (iPhone; iOS 16.2; zh_CN)");
+        con.setRequestProperty("User-Agent", web ? "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/17.0 Safari/605.1.15" : "NeteaseMusic 9.0.90/5038 (iPhone; iOS 16.2; zh_CN)");
         StringJoiner cookieHeader = new StringJoiner("; ");
         for (Iterator<String> keys = header.keys(); keys.hasNext();) { String k = keys.next(); cookieHeader.add(k+"="+header.get(k)); }
         con.setRequestProperty("Cookie", cookieHeader.toString());
@@ -145,7 +296,7 @@ final class MusicApi {
             int code = result.optInt("code", 200);
             synchronized (this) {
                 if (generation >= 0 && generation != epoch) throw new IOException("登录状态已改变，请重试");
-                if (generation >= 0 && (code == 200 || code == 803)) {
+                if (!webEncrypted && generation >= 0 && (code == 200 || code == 803)) {
                     JSONObject next = new JSONObject(cookies.toString()); boolean changed = false;
                     for (Map.Entry<String, List<String>> field : con.getHeaderFields().entrySet()) if ("Set-Cookie".equalsIgnoreCase(field.getKey())) {
                         for (String value : field.getValue()) for (HttpCookie c : HttpCookie.parse(value)) {
@@ -159,21 +310,41 @@ final class MusicApi {
             return result;
         } finally { con.disconnect(); }
     }
+    /** 音质档位，从高到低；与 /song/enhance/player/url/v1 的 level 取值一致。 */
+    static final java.util.List<String> QUALITY_LEVELS =
+            java.util.List.of("jymaster", "sky", "jyeffect", "hires", "lossless", "exhigh", "standard");
+
+    static String normalizeQuality(String value) {
+        if (value == null) return "exhigh";
+        String trimmed = value.trim();
+        if (trimmed.isEmpty() || "higher".equals(trimmed)) return "exhigh";
+        return QUALITY_LEVELS.contains(trimmed) ? trimmed : "exhigh";
+    }
+
+    /** 从请求档位开始往下降，直到标准档。 */
+    static java.util.List<String> qualityFallbacks(String requested) {
+        int start = QUALITY_LEVELS.indexOf(normalizeQuality(requested));
+        return QUALITY_LEVELS.subList(start < 0 ? QUALITY_LEVELS.size() - 2 : start, QUALITY_LEVELS.size());
+    }
+
     String audioURL(long id, String requestedQuality) throws Exception {
-        String quality = "exhigh";
-        JSONObject result = request("/song/enhance/player/url/v1", new JSONObject()
-                .put("ids", "["+id+"]").put("level", quality).put("encodeType", "flac"));
-        JSONObject found = result.getJSONArray("data").getJSONObject(0);
-        String url = found.optString("url", "");
-        if (url.isEmpty() || url.equals("null")) {
-            // v1 对部分客户端会拦，老接口还能答。
-            JSONObject legacy = request("/song/enhance/player/url", new JSONObject().put("ids", "["+id+"]").put("br", 320000));
-            found = legacy.getJSONArray("data").getJSONObject(0);
-            url = found.optString("url", "");
+        // 该档拿不到地址时逐档下降；只对「没有 url」降档，拿到地址就用。
+        for (String quality : qualityFallbacks(requestedQuality)) {
+            JSONObject payload = new JSONObject()
+                    .put("ids", "["+id+"]").put("level", quality).put("encodeType", "flac");
+            if ("sky".equals(quality)) payload.put("immerseType", "c51");
+            JSONObject result = request("/song/enhance/player/url/v1", payload);
+            JSONObject found = result.getJSONArray("data").getJSONObject(0);
+            String url = found.optString("url", "");
+            if (!url.isEmpty() && !url.equals("null")) return checkedMediaURL(url);
         }
-        if (url.isEmpty() || url.equals("null")) throw new IOException("当前歌曲暂无可播放音源");
-        // A trial fragment is what the account is entitled to; play it rather than failing.
-        return checkedMediaURL(url);
+        {
+            JSONObject legacy = request("/song/enhance/player/url", new JSONObject().put("ids", "["+id+"]").put("br", 320000));
+            JSONObject found = legacy.getJSONArray("data").getJSONObject(0);
+            String url = found.optString("url", "");
+            if (!url.isEmpty() && !url.equals("null")) return checkedMediaURL(url);
+        }
+        throw new IOException("当前歌曲暂无可播放音源");
     }
 
     static String checkedMediaURL(String value) throws Exception {

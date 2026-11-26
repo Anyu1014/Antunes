@@ -32,12 +32,13 @@ struct ArtistDetailView: View {
             GeometryReader { geo in
                 if HomeView.splitsLandscape(geo.size) {
                     landscapeContents(width: geo.size.width)
+                        .frostedNavigationBar(isWideLayout: true)
                 } else {
                     portraitContents
+                        .frostedNavigationBar()
                 }
             }
             .navigationBarTitleDisplayMode(.inline)
-            .frostedNavigationBar()
             .background(Platform.windowBackgroundColor.ignoresSafeArea())
             #else
             portraitContents
@@ -160,6 +161,7 @@ struct ArtistDetailView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .scrollIndicators(.hidden)
+            .compatSymmetricTopEdgeEffect()
             .frame(width: max(240, min(420, width * 0.42)))
 
             Divider().opacity(0.3)
@@ -173,6 +175,7 @@ struct ArtistDetailView: View {
             } footer: {
                 PlayerClearanceSpacer()
             }
+            .compatSymmetricTopEdgeEffect()
         }
     }
 

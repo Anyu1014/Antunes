@@ -49,6 +49,9 @@ struct SettingsSheet: View {
 #endif
 
 struct SettingsView: View {
+    #if os(iOS)
+    private var coverPreference = CollectionCoverPreference()
+    #endif
     @AppStorage("tabBarShowsLabels") private var showsTabBarLabels = false
     @AppStorage("librarySearchButton") private var librarySearchButton = true
     @AppStorage("bottomBarLyrics") private var bottomBarLyrics = true
@@ -166,6 +169,14 @@ struct SettingsView: View {
             }
         ))
     }
+
+    #if os(iOS)
+    @ViewBuilder private var collectionCoverOptions: some View {
+        Text("经典歌单封面").tag("classic")
+        Text("渐变封面柔和").tag("gradient")
+        Text("渐变封面压暗").tag("gradientDimmed")
+    }
+    #endif
 
     private func tabTitle(_ key: String) -> String {
         switch key {
@@ -313,8 +324,24 @@ struct SettingsView: View {
     private var settingsForm: some View {
         Form {
             Section("播放") {
-                LabeledContent("音质", value: AudioQuality.exhigh.displayName)
+                Picker("音质", selection: Binding(
+                    get: { settings.audioQuality.normalized },
+                    set: { settings.audioQuality = $0 }
+                )) {
+                    ForEach(AudioQuality.selectable) { quality in
+                        Text(quality.displayName).tag(quality)
+                    }
+                }
                     .accessibilityIdentifier("settingsAudioQuality")
+                Picker("下载音质", selection: Binding(
+                    get: { settings.downloadQuality.normalized },
+                    set: { settings.downloadQuality = $0 }
+                )) {
+                    ForEach(AudioQuality.selectable) { quality in
+                        Text(quality.displayName).tag(quality)
+                    }
+                }
+                .accessibilityIdentifier("settingsDownloadQuality")
                 #if os(iOS)
                 NavigationLink(value: SettingsPage.soundEffects) {
                     HStack {
@@ -415,6 +442,15 @@ struct SettingsView: View {
             #endif
 
             Section("外观") {
+                #if os(iOS)
+                Picker("竖屏歌单封面风格", selection: coverPreference.portraitSelection) {
+                    collectionCoverOptions
+                }
+                Picker("横屏歌单封面风格", selection: coverPreference.landscapeSelection) {
+                    collectionCoverOptions
+                    Text("渐变封面流光").tag("gradientFlow")
+                }
+                #endif
                 Picker("主题", selection: $settings.appearance) {
                     ForEach(AppAppearance.allCases) { appearance in
                         Text(appearance.displayName).tag(appearance)

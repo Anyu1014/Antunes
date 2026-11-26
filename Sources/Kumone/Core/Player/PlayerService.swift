@@ -988,6 +988,12 @@ final class PlayerService: ObservableObject {
         stemPrerenderStable = nil
     }
 
+    /// 播放中改音质：按当前位置重新解析并装载，队列/歌词/进度都不丢。
+    func reloadCurrentTrackForQualityChange() {
+        guard let track = currentTrack else { return }
+        startPlaying(track, resumeAt: progress)
+    }
+
     private func startPlaying(_ track: Track,
                               localLease: OfflinePlaybackLease? = nil, resumeAt: TimeInterval = 0) {
         offlineScan?.cancel()

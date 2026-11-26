@@ -1,4 +1,10 @@
 import SwiftUI
+#if os(iOS)
+import ImageIO
+import PhotosUI
+import UniformTypeIdentifiers
+import UIKit
+#endif
 
 
 struct PlaylistDetailView: View {
@@ -17,8 +23,11 @@ struct PlaylistDetailView: View {
     @State private var headerStuck = false
     @State private var showFullDescription = false
     #if os(iOS)
+    @Environment(\.dismiss) private var dismissPlaylist
+    @State private var playlistWasDeleted = false
     /// 页面可用尺寸：横屏时顶部信息要按「小播放器右边缘」收窄，需要真实窗口宽度。
     @State private var containerSize: CGSize = .zero
+    private var coverPreference = CollectionCoverPreference()
     @State private var showSearch = false
     @State private var searchFocused = false
     @State private var locateTrackID: Int?
@@ -117,11 +126,18 @@ struct PlaylistDetailView: View {
 
     var body: some View {
         ScrollViewReader { proxy in
-            onlineContent
+            onlineContent(searchProxy: proxy)
                 .task(id: "\(playlistID):\(account.offlineScope ?? ""):\(downloads.network.isKnown):\(downloads.network.connected)") {
                     await loadPlaylist()
                 }
                 #if os(iOS)
+                .sheet(isPresented: $showFullDescription, onDismiss: {
+                    if playlistWasDeleted { dismissPlaylist() }
+                }) {
+                    if let detail = model.detail {
+                        playlistDescriptionSheet(detail)
+                    }
+                }
                 .onChange(of: locateRequest) { _ in
                     guard let id = locateTrackID else { return }
                     // Let a cleared search lay out its rows before scrolling.
@@ -138,40 +154,6 @@ struct PlaylistDetailView: View {
                                 .help("重试")
                         }
                     }
-                    #if os(iOS)
-                    if isOwnLikedSongs && supportsPlaylistSearch && !isSearchActive {
-                        ToolbarItem(placement: .navigationBarTrailing) {
-                            Menu {
-                                Button {
-                                    revealSearch(proxy)
-                                } label: {
-                                    Label("在歌单内查找", systemImage: "magnifyingglass")
-                                }
-                                Menu {
-                                    Picker("排序方式", selection: $model.sortOrder) {
-                                        ForEach(PlaylistTrackSort.allCases, id: \.self) { order in
-                                            Text(LocalizedStringKey(order.rawValue)).tag(order)
-                                        }
-                                    }
-                                } label: {
-                                    Label("排序方式", systemImage: "arrow.up.arrow.down")
-                                }
-                            } label: {
-                                Label("更多", systemImage: "ellipsis")
-                            }
-                            .accessibilityIdentifier("likedSongsMenu")
-                        }
-                    } else if supportsPlaylistSearch && !isSearchActive {
-                        ToolbarItem(placement: .navigationBarTrailing) {
-                            Button {
-                                revealSearch(proxy)
-                            } label: {
-                                Label("在歌单内查找", systemImage: "magnifyingglass")
-                            }
-                            .accessibilityIdentifier("playlistSearchButton")
-                        }
-                    }
-                    #endif
                 }
         }
     }
@@ -189,7 +171,7 @@ struct PlaylistDetailView: View {
     }
 
     @ViewBuilder
-    private var onlineContent: some View {
+    private func onlineContent(searchProxy: ScrollViewProxy) -> some View {
         #if os(macOS)
         Group {
             if model.loadedScope == account.offlineScope, let detail = model.detail {
@@ -218,10 +200,25 @@ struct PlaylistDetailView: View {
         .navigationTitle(model.detail?.name ?? String(localized: "歌单"))
         #else
         GeometryReader { geo in
-            if HomeView.splitsLandscape(geo.size) {
-                landscapeContents(width: geo.size.width)
-            } else {
-                singleColumnContents
+            let isLandscape = HomeView.splitsLandscape(geo.size)
+            let style = coverPreference.style(landscape: geo.size.width > geo.size.height)
+            let gradientStyle = CollectionGradientStyle(rawValue: style)
+            let showsGradient = gradientStyle != nil && model.loadedScope == account.offlineScope && model.detail != nil
+            Group {
+                if showsGradient, let detail = model.detail, let gradientStyle {
+                    gradientContent(detail, width: geo.size.width, style: gradientStyle,
+                                    landscapeLeftWidth: isLandscape ? leftColumnWidth(geo.size.width) : nil,
+                                    search: supportsPlaylistSearch ? { toggleGradientSearch(searchProxy) } : nil)
+                } else if isLandscape {
+                    landscapeContents(width: geo.size.width)
+                } else {
+                    singleColumnContents
+                }
+            }
+            .toolbar {
+                if !isLandscape || !showsGradient {
+                    searchToolbar(searchProxy, usesGradient: gradientStyle != nil)
+                }
             }
         }
         .navigationTitle("")
@@ -245,6 +242,52 @@ struct PlaylistDetailView: View {
     }
 
     #if os(iOS)
+    @ToolbarContentBuilder
+    private func searchToolbar(_ proxy: ScrollViewProxy, usesGradient: Bool) -> some ToolbarContent {
+        if !usesGradient, isOwnLikedSongs && supportsPlaylistSearch && !isSearchActive {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Menu {
+                    Button {
+                        revealSearch(proxy)
+                    } label: {
+                        Label("在歌单内查找", systemImage: "magnifyingglass")
+                    }
+                    Menu {
+                        Picker("排序方式", selection: $model.sortOrder) {
+                            ForEach(PlaylistTrackSort.allCases, id: \.self) { order in
+                                Text(LocalizedStringKey(order.rawValue)).tag(order)
+                            }
+                        }
+                    } label: {
+                        Label("排序方式", systemImage: "arrow.up.arrow.down")
+                    }
+                } label: {
+                    Label("更多", systemImage: "ellipsis")
+                }
+                .accessibilityIdentifier("likedSongsMenu")
+            }
+        } else if supportsPlaylistSearch && !isSearchActive {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button {
+                    revealSearch(proxy)
+                } label: {
+                    Label("在歌单内查找", systemImage: "magnifyingglass")
+                }
+                .accessibilityIdentifier("playlistSearchButton")
+            }
+        }
+    }
+
+    private func toggleGradientSearch(_ proxy: ScrollViewProxy) {
+        if isSearchActive {
+            model.filter = ""
+            searchFocused = false
+            withAnimation(AppAnimation.standard) { showSearch = false }
+        } else {
+            revealSearch(proxy)
+        }
+    }
+
     /// 竖屏：原来的单列（hero + 吸顶操作条 + 歌曲列表）。
     private var singleColumnContents: some View {
         ScrollView {
@@ -301,9 +344,43 @@ struct PlaylistDetailView: View {
         }
     }
 
+    private func gradientContent(_ detail: PlaylistDetail, width: CGFloat, style: CollectionGradientStyle, landscapeLeftWidth: CGFloat?, search: (() -> Void)?) -> some View {
+        GradientCollectionPage(
+            width: width, landscapeLeftWidth: landscapeLeftWidth, coverURL: detail.coverImgUrl?.resizedImageURL(960),
+            style: style,
+            portraitSquareCover: true,
+            title: isLikedList ? String(localized: "我喜欢的音乐") : detail.name,
+            author: detail.creator?.nickname,
+            description: detail.description,
+            editDescription: isOwnPlaylist ? { showFullDescription = true } : nil,
+            isFavorite: detail.subscribed, canPlay: !playable.isEmpty,
+            play: { player.play(tracks: playable, source: .playlist(playlistID), context: .playlist(id: playlistID, name: detail.name)) },
+            favorite: !isOwnPlaylist && account.isLoggedIn ? { toggleSubscribe(detail) } : nil,
+            search: search
+        ) {
+            if isSelecting {
+                selectionBar(detail)
+            } else {
+                HStack(spacing: 10) {
+                    Text("\(detail.trackCount) 首 · \(Formatters.playCount(detail.playCount)) 次播放")
+                        .font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                    Spacer(minLength: 4)
+                    selectToggleButton()
+                    downloadButton(detail, compact: true)
+                }
+                .padding(.top, 8)
+                .padding(.bottom, landscapeLeftWidth == nil ? 4 : 8)
+            }
+        } rows: {
+            playlistBody.id("playlistTop")
+        }
+    }
+
+    private func leftColumnWidth(_ width: CGFloat) -> CGFloat { max(260, min(420, width * 0.42)) }
+
     /// 横屏：左半 = 封面/标题/创作者/简介/操作条，右半 = 歌曲列表，各自独立滚动。
     private func landscapeContents(width: CGFloat) -> some View {
-        let leftWidth = max(260, min(420, width * 0.42))
+        let leftWidth = leftColumnWidth(width)
         return HStack(alignment: .top, spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
@@ -343,7 +420,15 @@ struct PlaylistDetailView: View {
     #endif
 
     private func trackList(_ tracks: [Track], layout: TrackListView.Layout = .stack) -> some View {
-        TrackListView(
+        #if os(iOS)
+        let selection = isSelecting ? $selectedIDs : nil
+        let move: ((Int, Int, Bool) -> Void)? = isSelecting && !model.isLoading && !model.isLoadingMore && recommendationContext == nil
+            ? { model.moveTrack($0, relativeTo: $1, after: $2) } : nil
+        #else
+        let selection: Binding<Set<Int>>? = nil
+        let move: ((Int, Int, Bool) -> Void)? = nil
+        #endif
+        return TrackListView(
             tracks: tracks,
             privileges: model.privileges,
             source: .playlist(playlistID),
@@ -352,7 +437,8 @@ struct PlaylistDetailView: View {
             onRemoved: { track in Task { await model.remove(track) } },
             recommendationContext: recommendationContext,
             onRecommendationReplaced: { model.replaceRecommendation($0, with: $1) },
-            selection: isSelecting ? $selectedIDs : nil,
+            selection: selection,
+            onMove: move,
             layout: layout,
             // A search result plays the whole playlist from that song.
             queue: model.orderedTracks
@@ -544,8 +630,21 @@ struct PlaylistDetailView: View {
         }
     }
 
+    private var playlistEditorChevron: some View {
+        Button { showFullDescription = true } label: {
+            Image(systemName: "chevron.right")
+                .font(.system(size: 9))
+                .frame(minWidth: 24, minHeight: 24)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.tertiary)
+        .accessibilityLabel("打开歌单编辑")
+    }
+
     private func compactHero(_ detail: PlaylistDetail) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
+        let needsDescription = isOwnPlaylist && (detail.description ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 14) {
                 CachedAsyncImage(url: detail.coverImgUrl?.resizedImageURL(384), animated: false) {
                     // 占位不要画音符图标：图标出现再消失才叫「闪」，纯色块过渡看不出来。
@@ -561,7 +660,7 @@ struct PlaylistDetailView: View {
                         .font(.system(size: 16, weight: .bold))
                         .lineLimit(3)
 
-                    if let creator = detail.creator, !isLikedList {
+                    if let creator = detail.creator, !isLikedList || needsDescription {
                         HStack(spacing: 6) {
                             CachedAsyncImage(url: creator.avatarUrl?.resizedImageURL(48), animated: false)
                                 .frame(width: 18, height: 18)
@@ -570,6 +669,9 @@ struct PlaylistDetailView: View {
                                 .font(.system(size: 12, weight: .medium))
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
+                            if needsDescription {
+                                playlistEditorChevron
+                            }
                         }
                     }
 
@@ -579,7 +681,7 @@ struct PlaylistDetailView: View {
                 }
             }
 
-            if let description = detail.description, !description.isEmpty {
+            if let description = detail.description, !description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Button {
                     showFullDescription = true
                 } label: {
@@ -594,27 +696,57 @@ struct PlaylistDetailView: View {
                     }
                 }
                 .buttonStyle(.plain)
-                .sheet(isPresented: $showFullDescription) {
-                    NavigationStack {
-                        ScrollView {
-                            Text(description)
-                                .font(.system(size: 14))
-                                .padding(20)
-                        }
-                        .navigationTitle("歌单简介")
-                        #if os(iOS)
-                        .navigationBarTitleDisplayMode(.inline)
-                        #endif
-                        .toolbar {
-                            ToolbarItem(placement: .primaryAction) {
-                                Button("完成") { showFullDescription = false }
-                            }
-                        }
-                    }
-                }
             }
         }
     }
+
+    #if os(iOS)
+    private func playlistDescriptionSheet(_ detail: PlaylistDetail) -> some View {
+        let owner = account.authenticatedAccountID
+        let scope = account.offlineScope
+        let binding = MusicClient.shared.authenticationFingerprint
+        let editable = isOwnPlaylist && owner != nil && scope != nil && binding != nil
+        let deleteAction: (@MainActor () async throws -> Void)?
+        if editable && detail.specialType != 5 {
+            deleteAction = {
+                guard let scope, let binding, owner == account.authenticatedAccountID,
+                      scope == account.offlineScope, binding == MusicClient.shared.authenticationFingerprint else {
+                    throw MusicAPIError.needLogin
+                }
+                try await MusicAPI.deletePlaylist(id: playlistID, binding: binding)
+                await PlaylistSnapshotStore.shared.removePlaylist(id: playlistID, scope: scope)
+                guard owner == account.authenticatedAccountID, scope == account.offlineScope,
+                      binding == MusicClient.shared.authenticationFingerprint else { return }
+                account.userPlaylists.removeAll { $0.id == playlistID }
+                playlistWasDeleted = true
+                showFullDescription = false
+                Task { await account.refreshLibrary() }
+            }
+        } else {
+            deleteAction = nil
+        }
+        return PlaylistDescriptionSheet(detail: detail, editable: editable, onDelete: deleteAction, onSave: { description, jpeg in
+            guard editable, let scope, let binding, owner == account.authenticatedAccountID,
+                  scope == account.offlineScope, binding == MusicClient.shared.authenticationFingerprint else {
+                throw MusicAPIError.needLogin
+            }
+            var coverURL: String?
+            if let description {
+                try await MusicAPI.updatePlaylistDescription(id: playlistID, description: description, binding: binding)
+            }
+            if let jpeg {
+                coverURL = try await MusicAPI.updatePlaylistCover(id: playlistID, jpeg: jpeg, binding: binding)
+            }
+            guard owner == account.authenticatedAccountID, scope == account.offlineScope,
+                  binding == MusicClient.shared.authenticationFingerprint else { throw CancellationError() }
+            if let coverURL, let index = account.userPlaylists.firstIndex(where: { $0.id == playlistID }) {
+                account.userPlaylists[index].coverURL = coverURL
+            }
+            await model.applyEditedMetadata(description: description, coverURL: coverURL, scope: scope)
+            return coverURL
+        })
+    }
+    #endif
 
     @ViewBuilder
     private var currentTrackLocator: some View {
@@ -715,6 +847,11 @@ struct PlaylistDetailView: View {
                         Text(creator.nickname)
                             .font(.system(size: 12.5, weight: .medium))
                             .foregroundStyle(.secondary)
+                        #if os(iOS)
+                        if isOwnPlaylist && (detail.description ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            playlistEditorChevron
+                        }
+                        #endif
                     }
                 }
 
@@ -722,7 +859,7 @@ struct PlaylistDetailView: View {
                     .font(.system(size: 11.5))
                     .foregroundStyle(.tertiary)
 
-                if let description = detail.description, !description.isEmpty {
+                if let description = detail.description, !description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Button {
                         showFullDescription = true
                     } label: {
@@ -733,6 +870,7 @@ struct PlaylistDetailView: View {
                             .multilineTextAlignment(.leading)
                     }
                     .buttonStyle(.plain)
+                    #if os(macOS)
                     .popover(isPresented: $showFullDescription, arrowEdge: .bottom) {
                         ScrollView {
                             Text(description)
@@ -742,6 +880,7 @@ struct PlaylistDetailView: View {
                         }
                         .frame(maxHeight: 400)
                     }
+                    #endif
                 }
 
                 Spacer(minLength: 4)
@@ -1033,3 +1172,172 @@ private struct HeaderStuckKey: PreferenceKey {
         value = min(value, nextValue())
     }
 }
+
+
+#if os(iOS)
+private struct PlaylistDescriptionSheet: View {
+    let editable: Bool
+    let onDelete: (@MainActor () async throws -> Void)?
+    let onSave: @MainActor (String?, Data?) async throws -> String?
+    @Environment(\.dismiss) private var dismiss
+    @State private var original: String
+    @State private var draft: String
+    @State private var coverURL: String?
+    @State private var selection: PhotosPickerItem?
+    @State private var jpeg: Data?
+    @State private var busy = false
+    @State private var message = ""
+    @State private var confirmDeletion = false
+
+    init(detail: PlaylistDetail, editable: Bool, onDelete: (@MainActor () async throws -> Void)?,
+         onSave: @escaping @MainActor (String?, Data?) async throws -> String?) {
+        self.editable = editable
+        self.onDelete = onDelete
+        self.onSave = onSave
+        _original = State(initialValue: detail.description ?? "")
+        _draft = State(initialValue: detail.description ?? "")
+        _coverURL = State(initialValue: detail.coverImgUrl)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if editable {
+                    Form {
+                        Section("歌单封面") {
+                            HStack {
+                                Group {
+                                    if let jpeg, let image = UIImage(data: jpeg) {
+                                        Image(uiImage: image).resizable().scaledToFill()
+                                    } else {
+                                        CachedAsyncImage(url: coverURL?.resizedImageURL(128), animated: false)
+                                    }
+                                }
+                                .frame(width: 64, height: 64)
+                                .clipShape(RoundedRectangle(cornerRadius: 10))
+                                PhotosPicker(selection: $selection, matching: .images) {
+                                    Text("更换封面")
+                                }
+                                .disabled(busy)
+                            }
+                        }
+                        Section("歌单简介") {
+                            TextEditor(text: $draft)
+                                .frame(minHeight: 112)
+                                .accessibilityLabel("歌单简介")
+                                .disabled(busy)
+                        }
+                        if busy { ProgressView() }
+                        if !message.isEmpty {
+                            Text(message).font(.footnote).foregroundStyle(.red)
+                        }
+                        if onDelete != nil {
+                            Section {
+                                Button("删除歌单", role: .destructive) { confirmDeletion = true }
+                                    .disabled(busy)
+                            }
+                        }
+                    }
+                } else {
+                    ScrollView { Text(original).padding(20).frame(maxWidth: .infinity, alignment: .leading) }
+                }
+            }
+            .navigationTitle(editable ? "歌单编辑" : "歌单简介")
+            .navigationBarTitleDisplayMode(.inline)
+            .confirmationDialog("确认删除歌单？", isPresented: $confirmDeletion, titleVisibility: .visible) {
+                Button("确认删除", role: .destructive) { deletePlaylist() }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text("这会删除网易云音乐上的歌单，无法撤销。")
+            }
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button("完成") { finish() }.disabled(busy)
+                }
+            }
+        }
+        .interactiveDismissDisabled(busy)
+        .task(id: selection) {
+            guard let selection else { return }
+            busy = true
+            defer { busy = false }
+            do {
+                guard let data = try await selection.loadTransferable(type: Data.self) else {
+                    throw MusicAPIError.decoding("Missing cover")
+                }
+                let prepared = try await Task.detached(priority: .userInitiated) { try Self.squareJPEG(data) }.value
+                try Task.checkCancellation()
+                jpeg = prepared
+                message = ""
+            } catch is CancellationError {
+            } catch {
+                message = "读取图片失败，请换一张照片"
+            }
+        }
+    }
+
+    private func deletePlaylist() {
+        guard !busy, let onDelete else { return }
+        busy = true
+        message = ""
+        Task {
+            defer { busy = false }
+            do { try await onDelete() }
+            catch {
+                message = error.localizedDescription
+            }
+        }
+    }
+
+    private func finish() {
+        guard !busy else { return }
+        let description = editable && draft != original ? draft : nil
+        let jpeg = editable ? self.jpeg : nil
+        guard description != nil || jpeg != nil else { dismiss(); return }
+        if let description, description.utf16.count > 1000 {
+            message = "歌单简介最多 1000 字符"
+            return
+        }
+        busy = true
+        message = ""
+        Task {
+            defer { busy = false }
+            do {
+                if let description {
+                    _ = try await onSave(description, nil)
+                    original = description
+                }
+                if let jpeg {
+                    coverURL = try await onSave(nil, jpeg)
+                    self.jpeg = nil
+                }
+                dismiss()
+            } catch {
+                message = error.localizedDescription
+            }
+        }
+    }
+
+    nonisolated private static func squareJPEG(_ data: Data) throws -> Data {
+        guard data.count <= 30 * 1024 * 1024,
+              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                  kCGImageSourceCreateThumbnailFromImageAlways: true,
+                  kCGImageSourceCreateThumbnailWithTransform: true,
+                  kCGImageSourceThumbnailMaxPixelSize: 960
+              ] as CFDictionary) else { throw MusicAPIError.decoding("Invalid cover image") }
+        let side = min(image.width, image.height)
+        let rect = CGRect(x: (image.width - side) / 2, y: (image.height - side) / 2,
+                          width: side, height: side)
+        let output = NSMutableData()
+        guard let cropped = image.cropping(to: rect),
+              let target = CGImageDestinationCreateWithData(output as CFMutableData, UTType.jpeg.identifier as CFString, 1, nil)
+        else { throw MusicAPIError.decoding("Invalid cover crop") }
+        CGImageDestinationAddImage(target, cropped, [kCGImageDestinationLossyCompressionQuality: 0.86] as CFDictionary)
+        guard CGImageDestinationFinalize(target), output.length <= 768 * 1024 else {
+            throw MusicAPIError.decoding("Cover image too large")
+        }
+        return output as Data
+    }
+}
+#endif

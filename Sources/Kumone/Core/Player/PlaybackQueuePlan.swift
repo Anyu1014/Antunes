@@ -29,6 +29,31 @@ struct PlaybackQueueCandidate: Equatable {
 }
 
 enum PlaybackQueuePlan {
+    struct ListEntry: Identifiable {
+        enum ID: Hashable { case queue(Int), inserted(Int), detachedCurrent }
+        let id: ID
+        let track: Track
+        let isCurrent: Bool
+    }
+
+    static func fullList(queue: [Track], currentIndex: Int, current: Track?, inserted: [Track]) -> [ListEntry] {
+        let boundary = max(0, min(currentIndex, queue.count - 1) + 1)
+        let currentInQueue = queue.indices.contains(currentIndex) && queue[currentIndex].id == current?.id
+        func queueEntry(_ index: Int) -> ListEntry {
+            let isCurrent = currentInQueue && index == currentIndex
+            return ListEntry(id: .queue(index), track: (isCurrent ? current : nil) ?? queue[index], isCurrent: isCurrent)
+        }
+        var entries = queue.indices.prefix(boundary).map(queueEntry)
+        if let current, !currentInQueue {
+            entries.append(.init(id: .detachedCurrent, track: current, isCurrent: true))
+        }
+        entries.append(contentsOf: inserted.enumerated().map {
+            ListEntry(id: .inserted($0.offset), track: $0.element, isCurrent: false)
+        })
+        entries.append(contentsOf: queue.indices.dropFirst(boundary).map(queueEntry))
+        return entries
+    }
+
     /// One bounded pass through the actual order. The original queue is never
     /// sorted or filtered to produce an offline view of it.
     static func next(queue: [Track], currentIndex: Int, inserted: [Track], fm: [Track],

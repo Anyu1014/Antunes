@@ -356,6 +356,79 @@ final class MusicClient: @unchecked Sendable {
         }
     }
 
+    func playlistCoverWebRequest(_ path: String, _ payload: [String: Any], binding: String) async throws -> Data {
+        let (authentication, cookieSnapshot) = requestCredentials()
+        guard authentication.binding == binding else { throw CancellationError() }
+        guard let host = Upstream.webHost, let url = URL(string: "https://\(host)/weapi\(path)") else {
+            throw MusicAPIError.notConfigured
+        }
+        var body = payload
+        body["csrf_token"] = cookieSnapshot["__csrf"] ?? ""
+        body["e_r"] = false
+        let form = try RequestCrypto.weapi(payload: JSONSerialization.data(withJSONObject: body))
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue(Self.webUserAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue("https://\(host)/", forHTTPHeaderField: "Referer")
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.setValue(cookieHeader(extra: [:], snapshot: cookieSnapshot), forHTTPHeaderField: "Cookie")
+        request.httpBody = Self.encodeForm(form)
+        return try await perform(request, authentication: authentication, absorbResponseCookies: false)
+    }
+
+    static func playlistCoverPath(_ key: String) -> String? {
+        guard !key.isEmpty, key.utf8.count <= 512 else { return nil }
+        let relative = key.hasPrefix("/") ? String(key.dropFirst()) : key
+        let parts = relative.split(separator: "/", omittingEmptySubsequences: false)
+        guard !parts.isEmpty, parts.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else { return nil }
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~")
+        let encoded = parts.compactMap { $0.addingPercentEncoding(withAllowedCharacters: allowed) }
+        return encoded.count == parts.count ? encoded.joined(separator: "/") : nil
+    }
+
+    /// NOS 上传域名由 LBS 下发，`nosup-hz1.127.net` 只是兜底默认值。
+    /// 老代码把域名写死，桶换节点或被调度到别的上传机时会直接被拒。
+    private func nosUploadHost(bucket: String) async -> String? {
+        var components = URLComponents(string: "https://wanproxy.127.net/lbs")
+        components?.queryItems = [URLQueryItem(name: "version", value: "1.0"),
+                                  URLQueryItem(name: "bucketname", value: bucket)]
+        guard let url = components?.url,
+              let (data, response) = try? await session.data(from: url),
+              (response as? HTTPURLResponse)?.statusCode == 200,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let hosts = object["upload"] as? [String] else { return nil }
+        for host in hosts {
+            let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            guard !trimmed.isEmpty else { continue }
+            // LBS 常下发 http://，统一升到 https（同一台机器 443 可用）。
+            return "https://" + trimmed.replacingOccurrences(of: "http://", with: "").replacingOccurrences(of: "https://", with: "")
+        }
+        return nil
+    }
+
+    func uploadPlaylistCoverJPEG(_ jpeg: Data, path: String, token: String, binding: String) async throws {
+        guard authenticationFingerprint == binding else { throw CancellationError() }
+        guard !jpeg.isEmpty, jpeg.count <= 768 * 1024,
+              token.range(of: "^[!-~](?:[ -~]{0,4094}[!-~])?$", options: .regularExpression) != nil else {
+            throw MusicAPIError.decoding("Invalid cover upload")
+        }
+        let host = await nosUploadHost(bucket: "yyimgs") ?? "https://nosup-hz1.127.net"
+        guard let url = URL(string: "\(host)/yyimgs/\(path)?offset=0&complete=true&version=1.0") else {
+            throw MusicAPIError.decoding("Invalid cover upload")
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.httpBody = jpeg
+        request.timeoutInterval = 60
+        request.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
+        request.setValue(token, forHTTPHeaderField: "x-nos-token")
+        // 跟着 3xx 走：上传机常把请求转到真正的存储节点，早先禁跳转会被判成失败。
+        let (_, response) = try await session.data(for: request)
+        guard authenticationFingerprint == binding else { throw CancellationError() }
+        let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+        guard (200..<400).contains(status) else { throw MusicAPIError.http(status) }
+    }
+
     private static func encodeForm(_ fields: [String: String]) -> Data {
         var allowed = CharacterSet.alphanumerics
         allowed.insert(charactersIn: "-._~")

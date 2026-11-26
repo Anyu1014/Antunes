@@ -583,8 +583,112 @@ enum MusicAPI {
                        ["name": name, "privacy": isPrivate ? 10 : 0, "type": "NORMAL"]).id
     }
 
-    static func deletePlaylist(id: Int) async throws {
-        _ = try await eapi(CodeOnly.self, "/playlist/remove", ["ids": "[\(id)]"])
+    static func updatePlaylistDescription(id: Int, description: String, binding: String) async throws {
+        guard id > 0, description.utf16.count <= 1000 else { throw MusicAPIError.decoding("Invalid playlist description") }
+        _ = try await eapi(CodeOnly.self, "/playlist/desc/update", ["id": id, "desc": description],
+                           requiringAuthentication: binding)
+    }
+
+    private struct PlaylistUploadSlot: Decodable {
+        struct Body: Decodable {
+            let objectKey: String
+            let token: String
+            let docId: String
+            let numericDocId: UInt64?
+
+            private enum CodingKeys: String, CodingKey { case objectKey, token, docId }
+
+            init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                objectKey = try c.decode(String.self, forKey: .objectKey)
+                token = try c.decode(String.self, forKey: .token)
+                if let text = try? c.decode(String.self, forKey: .docId) {
+                    docId = text
+                    numericDocId = nil
+                } else {
+                    let value = try c.decode(UInt64.self, forKey: .docId)
+                    docId = String(value)
+                    numericDocId = value
+                }
+            }
+        }
+        let result: Body
+    }
+
+    private struct PlaylistCoverResponse: Decodable {
+        let code: Int
+        let url: String?
+    }
+
+    private enum CoverSaveError: LocalizedError {
+        case credentials, upload, commit
+        var errorDescription: String? {
+            switch self {
+            case .credentials: String(localized: "获取封面上传凭证失败，请重试")
+            case .upload: String(localized: "图片上传失败，请重试")
+            case .commit: String(localized: "更新歌单封面失败，请重试")
+            }
+        }
+    }
+
+    static func updatePlaylistCover(id: Int, jpeg: Data, binding: String) async throws -> String {
+        guard id > 0, !jpeg.isEmpty, jpeg.count <= 768 * 1024 else { throw MusicAPIError.decoding("Invalid playlist cover") }
+        let slotPayload: [String: Any] = [
+            "bucket": "yyimgs", "ext": "jpg", "filename": "playlist.jpg", "local": false,
+            "nos_product": 0, "type": "other", "return_body": #"{"code":200,"size":"$(ObjectSize)"}"#
+        ]
+        let slot: PlaylistUploadSlot.Body
+        do {
+            // eapi 优先（App 通道签发的 token 与 eapi 登录态同源），weapi 兜底。
+            // eapi / weapi 都可能下发 token；只认纯 ASCII（中间允许一个空格）、id 合法的那个。
+            func usable(_ value: PlaylistUploadSlot?) -> Bool {
+                guard let body = value?.result else { return false }
+                let trimmed = body.token.trimmingCharacters(in: .whitespacesAndNewlines)
+                return !trimmed.isEmpty
+                    && trimmed.range(of: "^[!-~](?:[ -~]{0,4094}[!-~])?$", options: .regularExpression) != nil
+                    && body.docId.range(of: "^[0-9]{1,24}$", options: .regularExpression) != nil
+            }
+            var allocated: PlaylistUploadSlot?
+            do {
+                let data = try await client.eapi("/nos/token/alloc", slotPayload)
+                allocated = try? client.decoded(PlaylistUploadSlot.self, from: data)
+            } catch is CancellationError { throw CancellationError() }
+            catch { allocated = nil }
+            if !usable(allocated) {
+                let data = try await client.playlistCoverWebRequest("/nos/token/alloc", slotPayload, binding: binding)
+                allocated = try client.decoded(PlaylistUploadSlot.self, from: data)
+            }
+            guard usable(allocated), let value = allocated else { throw CoverSaveError.credentials }
+            slot = value.result
+        } catch is CancellationError { throw CancellationError() }
+        catch { throw CoverSaveError.credentials }
+        guard let path = MusicClient.playlistCoverPath(slot.objectKey),
+              slot.docId.range(of: "^[0-9]{1,24}$", options: .regularExpression) != nil else {
+            throw CoverSaveError.credentials
+        }
+        do {
+            try await client.uploadPlaylistCoverJPEG(jpeg, path: path, token: slot.token, binding: binding)
+        } catch is CancellationError { throw CancellationError() }
+        catch { throw CoverSaveError.upload }
+        let result: PlaylistCoverResponse
+        do {
+            let coverIdentifier: Any = slot.numericDocId.map { NSNumber(value: $0) as Any } ?? slot.docId
+            let data = try await client.playlistCoverWebRequest("/playlist/cover/update",
+                                                                 ["id": id, "coverImgId": coverIdentifier], binding: binding)
+            result = try client.decoded(PlaylistCoverResponse.self, from: data)
+        } catch is CancellationError { throw CancellationError() }
+        catch { throw CoverSaveError.commit }
+        if let url = result.url, var parts = URLComponents(string: url),
+           let host = parts.host, host.hasSuffix(".music.126.net"), parts.user == nil,
+           parts.password == nil, parts.port == nil, ["http", "https"].contains(parts.scheme ?? "") {
+            parts.scheme = "https"
+            if let url = parts.url { return url.absoluteString }
+        }
+        return "https://p1.music.126.net/" + path
+    }
+
+    static func deletePlaylist(id: Int, binding: String? = nil) async throws {
+        _ = try await eapi(CodeOnly.self, "/playlist/remove", ["ids": "[\(id)]"], requiringAuthentication: binding)
     }
 
     static func subscribePlaylist(id: Int, subscribe: Bool) async throws {

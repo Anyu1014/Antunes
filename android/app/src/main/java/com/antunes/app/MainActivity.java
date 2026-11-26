@@ -2,7 +2,9 @@ package com.antunes.app;
 
 import android.app.*;
 import android.content.*;
+import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.graphics.ImageDecoder;
 import android.os.*;
 import android.view.*;
 import android.webkit.*;
@@ -18,6 +20,9 @@ public class MainActivity extends Activity {
     final ExecutorService network=Executors.newFixedThreadPool(4);
     final Handler ui=new Handler(Looper.getMainLooper());
     boolean destroyed=false;
+    private static final int PLAYLIST_COVER_REQUEST=42;
+    private String coverPickerRequest;
+    private long coverPickerSession;
     final BroadcastReceiver playback=new BroadcastReceiver(){public void onReceive(Context c,Intent i){emitState();}};
     @Override public void onCreate(Bundle saved){
         super.onCreate(saved);
@@ -68,12 +73,14 @@ public class MainActivity extends Activity {
     class Bridge{
         @JavascriptInterface public void call(String id,String operation,String raw){
             if(id.length()>100||raw.length()>2*1024*1024)return;
-            final long requestSession=operation.equals("request")?api.sessionEpoch():-1;
+            final long requestSession=api.sessionEpoch();
             network.execute(()->{try{
                 JSONObject a=new JSONObject(raw);Object result=new JSONObject();
                 switch(operation){
                     case "status":result=api.status();break;
                     case "request":result=api.request(a.getString("path"),a.optJSONObject("payload")==null?new JSONObject():a.getJSONObject("payload"),requestSession);break;
+                    case "pickPlaylistCover":ui.post(()->pickPlaylistCover(id,requestSession));return;
+                    case "updatePlaylistCover":result=api.updatePlaylistCover(a.getLong("id"),a.getString("jpeg"),requestSession);break;
                     case "cookieLogin":result=api.cookieLogin(a.getString("cookie"));break;
                     case "logout":api.logout();break;
                     case "position":
@@ -86,8 +93,8 @@ public class MainActivity extends Activity {
                     case "control":ui.post(()->control(a));break;
                     // 音质七档（与 MeloX 一致）：写进偏好，播放时按档位请求，
                     // 拿不到会自动往下降。
-                    case "quality":getSharedPreferences("player",MODE_PRIVATE).edit().putString("quality","exhigh").apply();break;
-                    case "downloadQuality":getSharedPreferences("player",MODE_PRIVATE).edit().putString("download_quality","exhigh").apply();break;
+                    case "quality":getSharedPreferences("player",MODE_PRIVATE).edit().putString("quality",MusicApi.normalizeQuality(a.optString("value"))).apply();break;
+                    case "downloadQuality":getSharedPreferences("player",MODE_PRIVATE).edit().putString("download_quality",MusicApi.normalizeQuality(a.optString("value"))).apply();break;
                     case "eq":
                         JSONArray bands=a.getJSONArray("bands");if(bands.length()!=10)throw new Exception("音效参数无效");for(int n=0;n<10;n++)if(Math.abs(bands.getInt(n))>12)throw new Exception("音效参数无效");
                         getSharedPreferences("player",MODE_PRIVATE).edit().putString("eq",bands.toString()).putBoolean("eqEnabled",a.optBoolean("enabled")).apply();ui.post(()->{if(PlaybackService.current!=null)PlaybackService.current.applyEQ();});break;
@@ -117,6 +124,41 @@ public class MainActivity extends Activity {
             }catch(Exception e){String message=(operation.equals("cookieLogin"))?"Cookie 登录验证失败，请检查后重试":e instanceof SocketTimeoutException?"网络连接超时，请重试":e.getMessage();reply(id,null,message==null?"操作失败，请重试":message);}});
         }
     }
+    private void pickPlaylistCover(String request, long session){
+        if(coverPickerRequest!=null){reply(request,null,"正在选择封面");return;}
+        if(session!=api.sessionEpoch()||!api.loggedIn()){reply(request,null,"登录状态已改变，请重试");return;}
+        Intent picker=new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("image/*");
+        try{
+            coverPickerRequest=request;coverPickerSession=session;
+            startActivityForResult(picker,PLAYLIST_COVER_REQUEST);
+        }catch(ActivityNotFoundException e){coverPickerRequest=null;reply(request,null,"找不到照片选择器");}
+    }
+
+    @Override protected void onActivityResult(int code,int result,Intent data){
+        super.onActivityResult(code,result,data);
+        if(code!=PLAYLIST_COVER_REQUEST||coverPickerRequest==null)return;
+        String request=coverPickerRequest;long session=coverPickerSession;coverPickerRequest=null;
+        if(result!=RESULT_OK||data==null||data.getData()==null){reply(request,null,null);return;}
+        network.execute(()->{
+            try{
+                if(session!=api.sessionEpoch())throw new IOException("登录状态已改变，请重试");
+                Bitmap bitmap=ImageDecoder.decodeBitmap(ImageDecoder.createSource(getContentResolver(),data.getData()),(decoder,info,source)->{
+                    int width=info.getSize().getWidth(),height=info.getSize().getHeight();
+                    double scale=Math.min(1,1280.0/Math.max(width,height));
+                    decoder.setTargetSize(Math.max(1,(int)(width*scale)),Math.max(1,(int)(height*scale)));
+                    decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE);
+                });
+                int side=Math.min(bitmap.getWidth(),bitmap.getHeight());
+                Bitmap square=Bitmap.createBitmap(bitmap,(bitmap.getWidth()-side)/2,(bitmap.getHeight()-side)/2,side,side);
+                if(side>640)square=Bitmap.createScaledBitmap(square,640,640,true);
+                ByteArrayOutputStream out=new ByteArrayOutputStream();
+                if(!square.compress(Bitmap.CompressFormat.JPEG,86,out)||out.size()>MusicApi.MAX_COVER_BYTES)throw new IOException("图片过大");
+                if(session!=api.sessionEpoch())throw new IOException("登录状态已改变，请重试");
+                reply(request,android.util.Base64.encodeToString(out.toByteArray(),android.util.Base64.NO_WRAP),null);
+            }catch(Exception e){reply(request,null,session!=api.sessionEpoch()?"登录状态已改变，请重试":"读取图片失败，请换一张照片");}
+        });
+    }
+
     void control(JSONObject a){
         String action=a.optString("action");
         if(!Set.of("queue","replaceQueue","toggle","pause","next","previous","seek","mode","sleep","remove").contains(action))return;
@@ -169,7 +211,8 @@ public class MainActivity extends Activity {
     }
     synchronized JSONObject download(JSONObject track)throws Exception{
         long id=track.getLong("id");if(id<=0)throw new Exception("歌曲无效");
-        String url=api.audioURL(id,getSharedPreferences("player",MODE_PRIVATE).getString("quality","exhigh"));
+        // 下载走单独的「下载音质」，与播放音质解耦。
+        String url=api.audioURL(id,getSharedPreferences("player",MODE_PRIVATE).getString("download_quality",getSharedPreferences("player",MODE_PRIVATE).getString("quality","exhigh")));
         File dir=new File(getFilesDir(),"audio");if(!dir.isDirectory()&&!dir.mkdirs())throw new IOException("下载目录创建失败");
         File tmp=new File(dir,id+".part");HttpURLConnection con=(HttpURLConnection)new URL(url).openConnection();con.setInstanceFollowRedirects(false);con.setConnectTimeout(15000);con.setReadTimeout(30000);
         try{

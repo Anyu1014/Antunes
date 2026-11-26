@@ -17,6 +17,7 @@ final class NowPlayingManager {
     /// the system offers — `MPNowPlayingInfoCenter` has no lyric key — and it
     /// falls back to the track's artists when there is nothing to sing.
     private var artistLine = ""
+    private var songTitle = ""
     private var lastSungLine = ""
     private var lyricCancellables: Set<AnyCancellable> = []
     #if os(iOS)
@@ -125,8 +126,19 @@ final class NowPlayingManager {
         return lyrics.lines[index].text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// 大标题槽位：正在唱的那句歌词；没有歌词时回到歌名。
+    private var titleLine: String {
+        lastSungLine.isEmpty ? songTitle : lastSungLine
+    }
+
+    /// 小字槽位：歌名 · 作者。歌词占了标题之后，这里要能认出是哪首歌。
     private var subtitle: String {
-        lastSungLine.isEmpty ? artistLine : lastSungLine
+        switch (songTitle.isEmpty, artistLine.isEmpty) {
+        case (true, true): return ""
+        case (true, false): return artistLine
+        case (false, true): return songTitle
+        default: return "\(songTitle) · \(artistLine)"
+        }
     }
 
     /// Repaints the artist slot when the sung line changes. A line that is empty
@@ -138,8 +150,12 @@ final class NowPlayingManager {
 
     private func push(line: String) {
         if !line.isEmpty { lastSungLine = line }
-        guard !info.isEmpty, info[MPMediaItemPropertyArtist] as? String != subtitle else { return }
-        info[MPMediaItemPropertyArtist] = subtitle
+        guard !info.isEmpty else { return }
+        let title = titleLine, artist = subtitle
+        guard info[MPMediaItemPropertyTitle] as? String != title
+                || info[MPMediaItemPropertyArtist] as? String != artist else { return }
+        info[MPMediaItemPropertyTitle] = title
+        info[MPMediaItemPropertyArtist] = artist
         infoCenter.nowPlayingInfo = info
     }
 
@@ -269,9 +285,10 @@ final class NowPlayingManager {
         reclaimSessionIfNeeded(whilePlaying: false)
         #endif
         artistLine = track.artistNames
+        songTitle = track.name
         lastSungLine = sungLine()
         info = [
-            MPMediaItemPropertyTitle: track.name,
+            MPMediaItemPropertyTitle: titleLine,
             MPMediaItemPropertyArtist: subtitle,
             MPMediaItemPropertyAlbumTitle: track.album.name,
             MPMediaItemPropertyPlaybackDuration: duration,
@@ -318,6 +335,7 @@ final class NowPlayingManager {
         artworkTask = nil
         info = [:]
         artistLine = ""
+        songTitle = ""
         lastSungLine = ""
         infoCenter.nowPlayingInfo = nil
         infoCenter.playbackState = .stopped

@@ -10,7 +10,7 @@ const code=source.slice(source.indexOf(start),source.indexOf('function filterPla
 const buttons=[];let scrolled=0,queryCleared=false,searchClosed=false,blurred=false;
 const input={value:'hidden song',blur(){blurred=true;}};
 const row={scrollIntoView(options){assert.equal(options.block,'center');scrolled++;}};
-const context={player:{queue:[{id:2}],index:0},listTracks:[{id:1},{id:2}],selecting:false,picked:new Set(),
+const context={loggedIn:false,prefs:{collectionCoverStyle:'classic'},player:{queue:[{id:2}],index:0},listTracks:[{id:1},{id:2}],selecting:false,picked:new Set(),
  e:String,cover:()=>'',count:String,icon:()=>'',playlistTrackRow:()=>'<div></div>',empty:()=>'',back(){},play(){},
  button:(label,fn,cls='',aria='')=>`<button class="${cls}" aria-label="${aria}">${label}</button>`,
  round:(icon,fn,aria,cls='')=>{buttons.push({aria,fn});return `<button class="${cls}" aria-label="${aria}"></button>`;},

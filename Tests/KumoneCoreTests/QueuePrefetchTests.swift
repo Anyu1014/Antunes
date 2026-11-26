@@ -19,6 +19,27 @@ private func waitForPrefetch(_ predicate: () async throws -> Bool) async throws 
 
 @Suite("Queue order and offline selection", .timeLimit(.minutes(1)))
 struct PlaybackQueuePlanTests {
+    @Test func completeListKeepsHistoryAndTailWithoutACap() throws {
+        let queue = try (1...1_001).map { try queueTrack($0) }
+        let currentIndex = 510
+        let entries = PlaybackQueuePlan.fullList(queue: queue, currentIndex: currentIndex,
+                                                  current: queue[currentIndex], inserted: [])
+        #expect(entries.map(\.track.id) == queue.map(\.id))
+        #expect(entries.filter(\.isCurrent).map(\.id) == [.queue(currentIndex)])
+    }
+
+    @Test func completeListDistinguishesRepeatsAndDetachedCurrent() throws {
+        let queue = try [queueTrack(1), queueTrack(2), queueTrack(1), queueTrack(3)]
+        let inserted = try [queueTrack(1), queueTrack(1)]
+        let entries = PlaybackQueuePlan.fullList(queue: queue, currentIndex: 2, current: try queueTrack(5),
+                                                  inserted: inserted)
+        #expect(entries.map(\.id) == [.queue(0), .queue(1), .queue(2), .detachedCurrent,
+                                       .inserted(0), .inserted(1), .queue(3)])
+        #expect(entries.filter(\.isCurrent).map(\.track.id) == [5])
+        #expect(entries.map(\.track.id) == [1, 2, 1, 5, 1, 1, 3])
+        #expect(PlaybackQueuePlan.fullList(queue: [], currentIndex: -1, current: nil, inserted: []).isEmpty)
+    }
+
     @Test func usesSavedShuffleOrderInsertionsAndOneLoopOnly() throws {
         let queue = try [queueTrack(3), queueTrack(1), queueTrack(2)]
         let inserted = try [queueTrack(8), queueTrack(9)]

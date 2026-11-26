@@ -6,6 +6,12 @@ struct FMView: View {
     @EnvironmentObject private var account: AccountStore
     @Environment(\.openLogin) private var openLogin
     @Environment(\.colorScheme) private var colorScheme
+    #if os(iOS)
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var artwork: PlatformImage?
+    @State private var previousArtwork: PlatformImage?
+    @State private var artworkRevision = 0
+    #endif
 
     private var isPhone: Bool {
         #if os(iOS)
@@ -28,17 +34,66 @@ struct FMView: View {
         .compatHiddenToolbarBackground()
         // 横屏不要那条系统顶栏（右半会露出一块材质），标题自己画在左上角。
         .toolbar(isLandscape ? .hidden : .visible, for: .navigationBar)
+        #if os(iOS)
+        .task(id: artworkURL) { await loadArtwork() }
+        #endif
     }
 
     private var track: Track? {
         player.isFMMode ? player.currentTrack : nil
     }
 
+    #if os(iOS)
+    private var artworkURL: URL? { track?.album.picUrl?.resizedImageURL(768) }
+
+    private func loadArtwork() async {
+        guard let url = artworkURL else {
+            previousArtwork = nil
+            artwork = nil
+            return
+        }
+        let image = await ImageCache.shared.image(for: url)
+        guard !Task.isCancelled, artworkURL == url else { return }
+        // Leave the previous cover in place until the next image is decoded.
+        previousArtwork = image == nil || reduceMotion ? nil : artwork
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.24)) {
+            artwork = image
+            artworkRevision += 1
+        }
+    }
+
+    private var artworkLayers: some View {
+        ZStack {
+            if let previousArtwork {
+                Image(platformImage: previousArtwork).resizable().scaledToFill()
+                    .accessibilityHidden(true)
+            }
+            if let artwork {
+                Image(platformImage: artwork).resizable().scaledToFill()
+                    .id(artworkRevision)
+                    .zIndex(1)
+                    .transition(.asymmetric(insertion: .opacity, removal: .identity))
+                    .accessibilityHidden(true)
+            }
+        }
+    }
+    #endif
+
     // MARK: - Backdrop
 
     private var backdrop: some View {
         ZStack {
             Platform.windowBackgroundColor
+            #if os(iOS)
+            GeometryReader { geo in
+                artworkLayers
+                    .frame(width: geo.size.width, height: geo.size.height)
+                    .clipped()
+                    .blur(radius: 80)
+                    .opacity(colorScheme == .dark ? 0.45 : 0.3)
+                    .saturation(1.4)
+            }
+            #else
             if let cover = track?.album.picUrl?.resizedImageURL(384) {
                 CachedAsyncImage(url: cover)
                     .scaledToFill()
@@ -46,13 +101,16 @@ struct FMView: View {
                     .opacity(colorScheme == .dark ? 0.45 : 0.3)
                     .saturation(1.4)
             }
+            #endif
             LinearGradient(
                 colors: [.clear, Platform.windowBackgroundColor.opacity(0.6)],
                 startPoint: .top, endPoint: .bottom
             )
         }
         .ignoresSafeArea()
+        #if os(macOS)
         .animation(AppAnimation.smooth, value: track?.id)
+        #endif
     }
 
     // MARK: - Content
@@ -118,6 +176,10 @@ struct FMView: View {
                         .lineLimit(1)
                 }
                 .frame(maxWidth: 420)
+                #if os(iOS)
+                .contentTransition(reduceMotion ? .identity : .opacity)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.24), value: track?.id)
+                #endif
 
                 if player.isFMMode {
                     controls
@@ -217,6 +279,7 @@ struct FMView: View {
                 // 高度必须给成整屏：否则 ScrollView 只按内容撑开，`anchor: .center`
                 // 就没有可视窗口可居中，当前行会停在顶部。
                 .frame(width: screenW / 2, height: screenH)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.24), value: player.lyrics == nil)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -224,6 +287,15 @@ struct FMView: View {
     #endif
 
     private func coverArt(_ size: CGFloat) -> some View {
+        #if os(iOS)
+        ZStack {
+            coverPlaceholder(size)
+            artworkLayers
+        }
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .shadow(color: .black.opacity(0.35), radius: 28, y: 14)
+        #else
         ZStack {
             if let cover = track?.album.picUrl?.resizedImageURL(768) {
                 CachedAsyncImage(url: cover)
@@ -231,16 +303,21 @@ struct FMView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                     .shadow(color: .black.opacity(0.35), radius: 28, y: 14)
             } else {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(.quaternary.opacity(0.4))
-                    .frame(width: size, height: size)
-                    .overlay(
-                        Image(systemName: "wave.3.right.circle")
-                            .font(.system(size: max(32, size * 0.25), weight: .light))
-                            .foregroundStyle(.tertiary)
-                    )
+                coverPlaceholder(size)
             }
         }
+        #endif
+    }
+
+    private func coverPlaceholder(_ size: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: 16, style: .continuous)
+            .fill(.quaternary.opacity(0.4))
+            .frame(width: size, height: size)
+            .overlay(
+                Image(systemName: "wave.3.right.circle")
+                    .font(.system(size: max(32, size * 0.25), weight: .light))
+                    .foregroundStyle(.tertiary)
+            )
     }
 
     private var controls: some View {

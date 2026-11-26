@@ -26,7 +26,12 @@ struct TrackDownloadButton: View {
     private var isDownloaded: Bool { state.isDownloaded }
     private var canResume: Bool { status.map { $0.canResume && $0 != .waitingNetwork } ?? false }
     private var isActive: Bool { status?.isInProgress == true }
-    private var showsControl: Bool { isVisible || isFocused || status != nil || isSubmitting || isDownloaded }
+    private var showsControl: Bool {
+        #if os(iOS)
+        if isDownloaded && status == nil && !isSubmitting { return false }
+        #endif
+        return isVisible || isFocused || status != nil || isSubmitting || isDownloaded
+    }
     private var title: String {
         if isActive || isSubmitting { return String(localized: "停止下载") }
         if canResume { return String(localized: "继续下载") }

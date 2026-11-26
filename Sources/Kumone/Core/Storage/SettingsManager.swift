@@ -3,30 +3,52 @@ import SwiftUI
 /// 音质档位。
 enum AudioQuality: String, CaseIterable, Identifiable {
     case standard
+    /// 历史值：旧版本存下的「较高」，现在归到极高。
     case higher
     case exhigh
     case lossless
     case hires
+    case jyeffect
+    case sky
+    case jymaster
 
     var id: String { rawValue }
+
+    /// 设置里可选的档位。`higher` 只作为旧存储值存在，不再出现在列表里。
+    static var selectable: [AudioQuality] {
+        [.standard, .exhigh, .lossless, .hires, .jyeffect, .sky, .jymaster]
+    }
+
+    /// 旧值收敛到当前档位。
+    var normalized: AudioQuality { self == .higher ? .exhigh : self }
+
+    /// 请求接口时填的 `level`，与网易云 `/song/enhance/player/url/v1` 的取值一致。
+    var apiLevel: String { normalized.rawValue }
+
+    /// 只有沉浸环绕声需要额外的 `immerseType`。
+    var requiresImmersiveType: Bool { normalized == .sky }
 
     var displayName: String {
         switch self {
         case .standard: return String(localized: "标准")
-        case .higher: return String(localized: "较高")
-        case .exhigh: return String(localized: "极高")
+        case .higher, .exhigh: return String(localized: "极高")
         case .lossless: return String(localized: "无损")
         case .hires: return "Hi-Res"
+        case .jyeffect: return String(localized: "高清环绕声")
+        case .sky: return String(localized: "沉浸环绕声")
+        case .jymaster: return String(localized: "超清母带")
         }
     }
 
     var badge: String {
         switch self {
         case .standard: return String(localized: "标准")
-        case .higher: return String(localized: "较高")
-        case .exhigh: return String(localized: "极高")
+        case .higher, .exhigh: return String(localized: "极高")
         case .lossless: return String(localized: "无损")
         case .hires: return String(localized: "高解析")
+        case .jyeffect: return String(localized: "环绕")
+        case .sky: return String(localized: "沉浸")
+        case .jymaster: return String(localized: "母带")
         }
     }
 }
@@ -505,9 +527,9 @@ final class SettingsManager: ObservableObject {
 
     private init() {
         let defaults = UserDefaults.standard
-        // 音质可选（七档，与 MeloX 一致）；旧键里存的 higher 归到高品质。
-        audioQuality = .exhigh
-        downloadQuality = .exhigh
+        // 音质可选（七档）；旧键里存的 higher 归到极高。
+        audioQuality = AudioQuality(rawValue: defaults.string(forKey: Keys.quality) ?? "")?.normalized ?? .exhigh
+        downloadQuality = AudioQuality(rawValue: defaults.string(forKey: Keys.downloadQuality) ?? "")?.normalized ?? .exhigh
         enableAudioCache = defaults.object(forKey: Keys.enableAudioCache) as? Bool ?? true
         // A size somebody chose stays chosen; the untouched default becomes automatic.
         audioCacheAutomatic = defaults.object(forKey: Keys.audioCacheAutomatic) as? Bool

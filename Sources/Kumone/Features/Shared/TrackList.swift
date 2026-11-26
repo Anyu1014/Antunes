@@ -356,7 +356,12 @@ struct TrackRow: View {
 
             Text(Formatters.duration(track.duration))
                 .font(.system(size: 11.5).monospacedDigit())
+                #if os(iOS)
+                .foregroundStyle(downloadState.isDownloaded && downloadState.status == nil
+                    ? AnyShapeStyle(Color.secondary) : AnyShapeStyle(.tertiary))
+                #else
                 .foregroundStyle(.tertiary)
+                #endif
                 .frame(width: 36, alignment: .trailing)
         }
     }
@@ -638,6 +643,9 @@ struct TrackListView: View {
     var recommendationContext: RecommendationContext?
     var onRecommendationReplaced: ((Track, Track) -> Void)?
     var selection: Binding<Set<Int>>?
+    var onMove: ((Int, Int, Bool) -> Void)?
+    @State private var reorderToken = UUID().uuidString
+    @State private var dropTarget: Int?
     var layout: Layout = .stack
     /// What a row tap plays, starting at that row; defaults to `tracks`. A
     /// search shows a subset but passes the whole list, so a result plays in
@@ -698,7 +706,7 @@ struct TrackListView: View {
         return VStack(spacing: 0) {
             if let selection {
                 let selected = selection.wrappedValue.contains(track.id)
-                Button {
+                let selectable = Button {
                     if selected { selection.wrappedValue.remove(track.id) }
                     else { selection.wrappedValue.insert(track.id) }
                 } label: {
@@ -716,9 +724,54 @@ struct TrackListView: View {
                 .accessibilityLabel(Text("\(track.name), \(track.artistNames)"))
                 .accessibilityValue(selected ? Text("已选择") : Text("未选择"))
                 .accessibilityIdentifier("select-download-\(track.id)")
+                #if os(iOS)
+                if let onMove {
+                    reorderTarget(HStack(spacing: 0) {
+                        selectable
+                        reorderHandle(track, at: index, move: onMove)
+                    }, track: track, move: onMove)
+                } else { selectable }
+                #else
+                selectable
+                #endif
             } else { row }
         }
     }
+
+    #if os(iOS)
+    private func reorderHandle(_ track: Track, at index: Int, move: @escaping (Int, Int, Bool) -> Void) -> some View {
+        Image(systemName: "line.3.horizontal")
+            .font(.system(size: 17, weight: .medium))
+            .foregroundStyle(.secondary)
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
+            .draggable("\(reorderToken):\(track.id)")
+            .accessibilityLabel("调整\(track.name)的顺序")
+            .accessibilityAdjustableAction { direction in
+                let offset = direction == .increment ? 1 : -1
+                if tracks.indices.contains(index + offset) {
+                    move(track.id, tracks[index + offset].id, offset > 0)
+                }
+            }
+    }
+
+    private func reorderTarget<Row: View>(_ row: Row, track: Track, move: @escaping (Int, Int, Bool) -> Void) -> some View {
+        row.background(alignment: .center) {
+            if dropTarget == track.id { Theme.accent.opacity(0.12) }
+        }
+        .dropDestination(for: String.self) { strings, _ in
+            guard let token = strings.first, token.hasPrefix(reorderToken + ":"),
+                  let id = Int(token.dropFirst(reorderToken.count + 1)), id != track.id,
+                  let from = tracks.firstIndex(where: { $0.id == id }),
+                  let to = tracks.firstIndex(where: { $0.id == track.id }) else { return false }
+            move(id, track.id, to > from)
+            return true
+        } isTargeted: { inside in
+            if inside { dropTarget = track.id }
+            else if dropTarget == track.id { dropTarget = nil }
+        }
+    }
+    #endif
 
     private var playableTracks: [Track] {
         (queue ?? tracks).filter { playability(of: $0) == .playable }

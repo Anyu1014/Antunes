@@ -31,6 +31,8 @@ public struct IOSMainWindow: View {
 
     @State private var lastForegroundRefresh: Date?
     @State private var interfaceSize: CGSize = .zero
+    /// 迷你播放条矩形（屏幕坐标系），横屏封面与文字块都要用。
+    @State private var miniPlayerFrame: CGRect?
     /// 冷启动首帧只构建当前板块的页面。原来五个页面在首帧全部建成（各有自己的
     /// NavigationStack + 列表），首帧提交被拖到一秒级，期间只剩底色 —— 就是
     /// 「偶发冷启动全白屏」。其余页面在第一次被切到时再建。
@@ -295,6 +297,10 @@ public struct IOSMainWindow: View {
                 colorScheme: resolvedColorScheme
             ))
             .animation(AppAnimation.standard, value: player.hasCurrentTrack)
+        // 放在 overlay 之后：偏好从播放条一路传到整屏，才能读到它的中线。
+        .onPreferenceChange(MiniPlayerFramePreference.self) { value in
+            miniPlayerFrame = value
+        }
     }
 
     @available(iOS 26.0, *)
@@ -389,6 +395,7 @@ public struct IOSMainWindow: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .environment(\.isLandscapeWindow, isLandscape)
             .environment(\.floatingChromeClearance, clearance)
+            .environment(\.miniPlayerFrame, miniPlayerFrame)
             .overlay(alignment: .bottom) {
                 Group {
                 if !isReadingConversation {
@@ -399,6 +406,15 @@ public struct IOSMainWindow: View {
                                          morphNamespace: horizontal ? barGlass : nil)
                             .nowPlayingTransitionSource(in: nowPlayingTransition)
                             .frame(width: horizontal ? playerWidth : nil)
+                            // 把播放条中线报给详情页，横屏封面据此决定高度。
+                            .background {
+                                GeometryReader { proxy in
+                                    Color.clear.preference(
+                                        key: MiniPlayerFramePreference.self,
+                                        value: proxy.frame(in: .global)
+                                    )
+                                }
+                            }
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
 
@@ -1749,6 +1765,13 @@ private struct SlideOffset: ViewModifier, Animatable {
 }
 
 /// 底栏覆盖层报告不受键盘影响的尺寸，不用几何测量包住页面。
+private struct MiniPlayerFramePreference: PreferenceKey {
+    static var defaultValue: CGRect? = nil
+    static func reduce(value: inout CGRect?, nextValue: () -> CGRect?) {
+        if let next = nextValue() { value = next }
+    }
+}
+
 private struct InterfaceSizeKey: PreferenceKey {
     static var defaultValue: CGSize = .zero
     static func reduce(value: inout CGSize, nextValue: () -> CGSize) {

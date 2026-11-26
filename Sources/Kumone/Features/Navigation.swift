@@ -15,6 +15,20 @@ extension EnvironmentValues {
         set { self[FloatingChromeClearanceKey.self] = newValue }
     }
 }
+
+
+private struct MiniPlayerFrameKey: EnvironmentKey {
+    static let defaultValue: CGRect? = nil
+}
+
+extension EnvironmentValues {
+    /// 迷你播放条在屏幕坐标系里的矩形（0 点为屏幕左上角）。详情页用它把封面
+    /// 拉到「屏幕顶 → 播放控制器中线」，并把文字块压到播放条上沿之上。
+    var miniPlayerFrame: CGRect? {
+        get { self[MiniPlayerFrameKey.self] }
+        set { self[MiniPlayerFrameKey.self] = newValue }
+    }
+}
 #endif
 
 private struct OpenLoginKey: EnvironmentKey {

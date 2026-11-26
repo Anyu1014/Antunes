@@ -6,11 +6,12 @@ final class PlaylistContent: ObservableObject {
     let playlistID: Int
     @Published var detail: PlaylistDetail?
     @Published var tracks: [Track] = [] {
-        didSet { orderedTracks = sortOrder.sorted(tracks) }
+        didSet { refreshOrderedTracks() }
     }
     @Published var sortOrder: PlaylistTrackSort = .addedNewestFirst {
-        didSet { orderedTracks = sortOrder.sorted(tracks) }
+        didSet { refreshOrderedTracks() }
     }
+    private var manualOrder: [Int] = []
     private(set) var orderedTracks: [Track] = []
     @Published var privileges: [Int: TrackPrivilege] = [:]
     @Published var isLoading = true
@@ -23,6 +24,8 @@ final class PlaylistContent: ObservableObject {
     private var recommendationReplacements: [Int: Track] = [:]
     private var removedTrackIDs: Set<Int> = []
     private var loadGeneration = 0
+    private var editedDescription: String?
+    private var editedCoverURL: String?
     private let detailLoader: (Int) async throws -> MusicAPI.PlaylistDetailResponse
     private let tracksLoader: ([Int]) async throws -> MusicAPI.SongDetailResponse
     private let snapshots: PlaylistSnapshotStore?
@@ -39,6 +42,7 @@ final class PlaylistContent: ObservableObject {
         self.tracksLoader = tracksLoader
         self.snapshots = snapshots
         self.accountScope = accountScope
+        if let scope = accountScope() { loadManualOrder(scope: scope) }
         if let scope = accountScope(), let saved = snapshots?.cachedSnapshot(id: playlistID, scope: scope) {
             loadedScope = scope
             detail = saved.detail
@@ -47,7 +51,7 @@ final class PlaylistContent: ObservableObject {
             // once the view knows which thumbnail size its layout uses.
             if !preparesArtwork {
                 tracks = saved.detail.tracks
-                orderedTracks = sortOrder.sorted(tracks)
+                refreshOrderedTracks()
                 isLoading = false
             }
         }
@@ -70,6 +74,8 @@ final class PlaylistContent: ObservableObject {
               background: Bool = false, artworkSize: Int? = nil) async {
         loadGeneration += 1
         let generation = loadGeneration
+        editedDescription = nil
+        editedCoverURL = nil
         let scope = accountScope()
         if loadedScope != scope {
             detail = nil
@@ -78,6 +84,7 @@ final class PlaylistContent: ObservableObject {
             reducedRecommendationIDs = []
             recommendationReplacements = [:]
             loadedScope = scope
+            loadManualOrder(scope: scope)
         }
         removedTrackIDs = []
         isLoading = detail == nil || (tracks.isEmpty && detail?.tracks.isEmpty == false)
@@ -145,6 +152,8 @@ final class PlaylistContent: ObservableObject {
                 await warmLeadingArtwork(loadedTracks, size: artworkSize)
                 guard valid(generation, scope: scope) else { return }
             }
+            if let editedDescription { loaded.description = editedDescription }
+            if let editedCoverURL { loaded.coverImgUrl = editedCoverURL }
             if detail != loaded { detail = loaded }
             if tracks != loadedTracks { tracks = loadedTracks }
             let ids = Set(loaded.trackIds.map(\.id))
@@ -157,6 +166,14 @@ final class PlaylistContent: ObservableObject {
             errorMessage = error is OfflineAudioError
                 ? String(localized: "无法加载歌单，请重试") : error.localizedDescription
         }
+    }
+
+    func applyEditedMetadata(description: String? = nil, coverURL: String? = nil, scope: String) async {
+        guard scope == loadedScope, scope == accountScope(), var detail else { return }
+        if let description { editedDescription = description; detail.description = description }
+        if let coverURL { editedCoverURL = coverURL; detail.coverImgUrl = coverURL }
+        self.detail = detail
+        try? await snapshots?.updateMetadata(id: playlistID, scope: scope, description: description, coverURL: coverURL)
     }
 
     private func warmLeadingArtwork(_ tracks: [Track], size: Int) async {
@@ -212,6 +229,38 @@ final class PlaylistContent: ObservableObject {
             merged[privilege.id] = privilege
         }
         if merged != privileges { privileges = merged }
+    }
+
+    private func manualOrderKey(scope: String) -> String { "playlistOrder.\(scope).\(playlistID)" }
+
+    private func loadManualOrder(scope: String?) {
+        manualOrder = scope.flatMap { UserDefaults.standard.array(forKey: manualOrderKey(scope: $0)) as? [Int] } ?? []
+        sortOrder = manualOrder.isEmpty ? .addedNewestFirst : .manual
+    }
+
+    private func refreshOrderedTracks() {
+        guard sortOrder == .manual else {
+            orderedTracks = sortOrder.sorted(tracks)
+            return
+        }
+        let rank = Dictionary(manualOrder.enumerated().map { ($0.element, $0.offset) }, uniquingKeysWith: min)
+        let ranked = tracks.filter { rank[$0.id] != nil }.sorted { rank[$0.id, default: 0] < rank[$1.id, default: 0] }
+        var iterator = ranked.makeIterator()
+        // New server tracks keep their normal positions; reorder only known tracks.
+        orderedTracks = tracks.map { track in rank[track.id] == nil ? track : iterator.next() ?? track }
+    }
+
+    func moveTrack(_ id: Int, relativeTo target: Int, after: Bool) {
+        guard id != target, !isLoading, !isLoadingMore, let scope = loadedScope, scope == accountScope(),
+              let from = orderedTracks.firstIndex(where: { $0.id == id }) else { return }
+        var order = orderedTracks.map(\.id)
+        order.remove(at: from)
+        guard let index = order.firstIndex(of: target) else { return }
+        order.insert(id, at: index + (after ? 1 : 0))
+        guard order != orderedTracks.map(\.id) else { return }
+        manualOrder = order
+        UserDefaults.standard.set(order, forKey: manualOrderKey(scope: scope))
+        sortOrder = .manual
     }
 
     func remove(_ track: Track) async {

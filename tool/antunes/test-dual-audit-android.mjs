@@ -33,6 +33,21 @@ function context(code,locals={}){
 const cases=[];
 const test=(name,run)=>cases.push([name,run]);
 
+test('processed Explore covers keep the official image pipeline intact',()=>{
+  const url='http://p1.music.126.net/cover.jpg?imageView=1&thumbnail=800y800&enlarge=1%7CimageView=1&watermark&image=fixture==%7CimageView=1&thumbnail=140y140&';
+  assert.equal(core.imageURL(url,576),url.replace('http:','https:').replace('140y140','576y576'));
+  assert.equal(core.imageURL('http://p3.music.126.net/cover.jpg?param=96y96',576),'https://p3.music.126.net/cover.jpg?param=576y576');
+});
+
+test('manual order survives refresh without moving newly added tracks',()=>{
+  const original=[1,2,3].map(id=>({id}));
+  const moved=core.movePlaylistTrack(original,1,3,true);
+  const changed=core.applyPlaylistOrder([{id:4},...original],moved.map(t=>t.id));
+  assert.deepEqual(moved.map(t=>t.id),[2,3,1]);
+  assert.deepEqual(changed.map(t=>t.id),[4,2,3,1]);
+  assert.strictEqual(core.movePlaylistTrack(original,1,500,true),original);
+});
+
 test('partial album retains cover without carrying it onto a different album',async()=>{
   const old=[{id:1,al:{id:9,picUrl:'https://example.test/cover'}}];
   const next=[{id:1,name:'partial'},{id:2,al:{id:9}},{id:3,al:{id:10}}];
@@ -50,7 +65,7 @@ test('superseded thumbnail wait cannot replace the active tab',async()=>{
   const image=pending(),network=pending(),writes=[];
   const snapshot={playlist:{id:23,tracks:[{id:1,al:{id:9,picUrl:'https://example.test/cover'}}]}};
   const f=context(section('async function loadPlaylist(','function updatePlaylistPage('),{
-    route:{kind:'playlist',id:23}, cache:new Map([['playlist-23',snapshot]]),
+    route:{kind:'playlist',id:23}, playlistOrderKey:()=>null, cache:new Map([['playlist-23',snapshot]]),
     preloadCoversAsync:()=>image.promise,api:()=>network.promise,loading(){},
     updatePlaylistPage(){writes.push('stale playlist');}
   });

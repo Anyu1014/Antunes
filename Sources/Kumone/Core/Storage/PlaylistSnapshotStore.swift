@@ -56,6 +56,7 @@ actor PlaylistSnapshotStore {
     private nonisolated(unsafe) let memory = NSCache<NSString, SnapshotBox>()
     private var refreshes: [URL: (token: UUID, background: Bool)] = [:]
     private var foregroundRefreshes: [URL: Set<UUID>] = [:]
+    private var editedMetadata: [URL: (description: String?, coverURL: String?)] = [:]
     private var removedTracks: [URL: Set<Int>] = [:]
     private var recommendationReplacements: [URL: [Int: Track]] = [:]
 
@@ -99,6 +100,7 @@ actor PlaylistSnapshotStore {
         if foregroundRefreshes[url]?.isEmpty == true { foregroundRefreshes[url] = nil }
         guard refreshes[url]?.token == token else { return }
         refreshes[url] = nil
+        editedMetadata[url] = nil
         removedTracks[url] = nil
         recommendationReplacements[url] = nil
     }
@@ -107,11 +109,38 @@ actor PlaylistSnapshotStore {
         let url = file(id: snapshot.detail.id, scope: scope)
         guard refreshes[url]?.token == token else { return }
         var snapshot = snapshot
+        if let edit = editedMetadata[url] {
+            if let description = edit.description { snapshot.detail.description = description }
+            if let coverURL = edit.coverURL { snapshot.detail.coverImgUrl = coverURL }
+        }
         for (id, replacement) in recommendationReplacements[url] ?? [:] {
             snapshot.replaceRecommendation(id, with: replacement)
         }
         if let removed = removedTracks[url], !removed.isEmpty { snapshot.remove(removed) }
         try write(snapshot, to: url)
+    }
+
+    func updateMetadata(id: Int, scope: String, description: String?, coverURL: String?) throws {
+        let url = file(id: id, scope: scope)
+        // A refresh that started before the server write must not erase it.
+        if refreshes[url] != nil {
+            editedMetadata[url] = (description ?? editedMetadata[url]?.description, coverURL ?? editedMetadata[url]?.coverURL)
+        }
+        guard var snapshot = load(id: id, scope: scope) else { return }
+        if let description { snapshot.detail.description = description }
+        if let coverURL { snapshot.detail.coverImgUrl = coverURL }
+        try write(snapshot, to: url)
+    }
+
+    func removePlaylist(id: Int, scope: String) {
+        let url = file(id: id, scope: scope)
+        refreshes[url] = nil
+        foregroundRefreshes[url] = nil
+        editedMetadata[url] = nil
+        removedTracks[url] = nil
+        recommendationReplacements[url] = nil
+        memory.removeObject(forKey: url.absoluteString as NSString)
+        try? FileManager.default.removeItem(at: url)
     }
 
     func remove(trackID: Int, playlistID: Int, scope: String) throws {

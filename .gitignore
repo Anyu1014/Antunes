@@ -19,3 +19,6 @@ android/**/build/
 android/local.properties
 android/.signing/
 node_modules/
+
+# gh CLI 状态目录（运行时产物，不入库）
+/.local/

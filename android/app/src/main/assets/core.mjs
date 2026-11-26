@@ -1,5 +1,35 @@
 export function escapeHTML(value) { return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-export function imageURL(value, size = 384) { if (!value) return ''; try { const u = new URL(value); if (!['https:','http:'].includes(u.protocol)) return ''; u.protocol='https:'; const n = Number(size) > 0 ? Math.round(Number(size)) : 384; u.searchParams.set('param', `${n}y${n}`); return u.href; } catch { return ''; } }
+export function applyPlaylistOrder(tracks, order) {
+  const rank=new Map(order.map((id,i)=>[id,i]));
+  const ranked=tracks.filter(t=>rank.has(t.id)).sort((a,b)=>rank.get(a.id)-rank.get(b.id));
+  let i=0;
+  return tracks.map(t=>rank.has(t.id)?ranked[i++]:t);
+}
+export function movePlaylistTrack(tracks, id, anchor, after) {
+  if(id===anchor)return tracks;
+  const next=tracks.slice(),from=next.findIndex(t=>t.id===id);
+  if(from<0)return tracks;
+  const [item]=next.splice(from,1),to=next.findIndex(t=>t.id===anchor);
+  if(to<0)return tracks;
+  const at=to+Number(after);
+  if(at===from)return tracks;
+  next.splice(at,0,item);
+  return next;
+}
+export function imageURL(value, size = 384) {
+  if (!value) return '';
+  try {
+    const u=new URL(value);
+    if(!['https:','http:'].includes(u.protocol))return '';
+    u.protocol='https:';
+    const n=Number(size)>0?Math.round(Number(size)):384, dimensions=`${n}y${n}`;
+    // The CDN executes the raw processing pipeline before serving the final thumbnail.
+    if(u.hostname.endsWith('.music.126.net')&&/%7cimageView=1/i.test(u.search)&&/thumbnail=\d+y\d+(?!.*thumbnail=)/i.test(u.search)){
+      u.search=u.search.replace(/thumbnail=\d+y\d+(?!.*thumbnail=)/i,'thumbnail='+dimensions);
+    }else u.searchParams.set('param',dimensions);
+    return u.href;
+  }catch{return '';}
+}
 export function track(raw) {
   const t = raw.simpleSong || raw.song || raw;
   return {id:Number(t.id),name:t.name||'未知歌曲',artist:t.artist||((t.ar||t.artists||[]).map(a=>a.name).join(' / ')),artists:t.ar||t.artists||[],album:t.al||t.album||{},cover:t.cover||(t.al||t.album||{}).picUrl||'',duration:Number(t.dt||t.duration||0),fee:Number(t.fee||0)};
