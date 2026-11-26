@@ -91,7 +91,11 @@ public class PlaybackService extends Service {
                 String id=""+track.getLong("id");
                 File offline=new File(getFilesDir(), "audio/"+id+".audio");
                 String url=offline.exists() ? offline.getAbsolutePath() : api.audioURL(track.getLong("id"),getSharedPreferences("player",MODE_PRIVATE).getString("quality","exhigh"));
-                handler.post(() -> { if(token!=generation)return; try {
+                handler.post(() -> { if(token!=generation)return;
+                  // 这一代要播的必须是队列里这一格，别把上一格的声音接上来。
+                  JSONObject expect=queue.optJSONObject(index);
+                  if(expect==null||expect.optLong("id")!=track.optLong("id")){loading=false;changed();return;}
+                  try {
                     player=new MediaPlayer();
                     player.setWakeMode(this, PowerManager.PARTIAL_WAKE_LOCK);
                     player.setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build());

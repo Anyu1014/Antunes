@@ -783,6 +783,13 @@ final class PlayerService: ObservableObject {
 
     private func startPlaying(_ track: Track,
                               localLease: OfflinePlaybackLease? = nil, resumeAt: TimeInterval = 0) {
+        // 切歌先把上一首彻底静音：新音源（尤其 FLAC 要先整段下载）就位前，
+        // 旧的那一路若还在响，听感就是「换了歌但声音没变」。
+        if currentTrack?.id != track.id {
+            engine.pause()
+            engine.replaceCurrentItem(with: nil)
+            stopFLAC()
+        }
         offlineScan?.cancel()
         offlineScan = nil
         offlineScanID = UUID()
