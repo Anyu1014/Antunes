@@ -9,6 +9,7 @@ struct IOSPlaybackQueueView: View {
     var body: some View {
         let entries = player.playbackList
         NavigationStack {
+            ScrollViewReader { proxy in
             ScrollView(showsIndicators: false) {
                 LazyVStack(alignment: .leading, spacing: 2) {
                     PlaybackHandoffList()
@@ -17,6 +18,7 @@ struct IOSPlaybackQueueView: View {
                     if !entries.isEmpty {
                         ForEach(entries) { entry in
                             PlaybackQueueRow(entry: entry)
+                                .id(entry.id)
                         }
                     } else {
                         VStack(spacing: 8) {
@@ -31,6 +33,13 @@ struct IOSPlaybackQueueView: View {
                 }
                 .padding(10)
             }
+            .onAppear {
+                // 打开播放列表时把正在播的这首摆到可见区域正中。
+                guard let current = entries.first(where: \.isCurrent) else { return }
+                DispatchQueue.main.async {
+                    proxy.scrollTo(current.id, anchor: .center)
+                }
+            }
             .navigationTitle("播放列表")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -39,6 +48,7 @@ struct IOSPlaybackQueueView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+            }
             }
         }
         .background(queueBackdrop)
