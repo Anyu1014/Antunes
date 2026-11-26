@@ -324,24 +324,7 @@ struct SettingsView: View {
     private var settingsForm: some View {
         Form {
             Section("播放") {
-                Picker("音质", selection: Binding(
-                    get: { settings.audioQuality.normalized },
-                    set: { settings.audioQuality = $0 }
-                )) {
-                    ForEach(AudioQuality.selectable) { quality in
-                        Text(quality.displayName).tag(quality)
-                    }
-                }
-                    .accessibilityIdentifier("settingsAudioQuality")
-                Picker("下载音质", selection: Binding(
-                    get: { settings.downloadQuality.normalized },
-                    set: { settings.downloadQuality = $0 }
-                )) {
-                    ForEach(AudioQuality.selectable) { quality in
-                        Text(quality.displayName).tag(quality)
-                    }
-                }
-                .accessibilityIdentifier("settingsDownloadQuality")
+                LabeledContent("音质", value: AudioQuality.exhigh.displayName)
                 #if os(iOS)
                 NavigationLink(value: SettingsPage.soundEffects) {
                     HStack {

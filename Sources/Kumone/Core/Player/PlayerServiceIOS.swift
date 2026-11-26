@@ -175,19 +175,11 @@ final class PlayerService: ObservableObject {
 
     private let engine = AVPlayer()
 
-    // MARK: - FLAC（帧精确）播放器
-    // AVFoundation 解码 FLAC 时 seek 不落在精确帧上（同一文件按 t 跳转后解出的采样
-    // 与基准完全对不上，mp3 则逐采样一致），所以无损 / Hi-Res / 母带这一支不用
-    // AVPlayer：先落一个本地文件，再用 AVAudioEngine 按帧播放与定位。
-    private var flacPlayer: FLACFilePlayer?
-
-    private var flacTimer: Timer?
     private var lastPlaybackCheckpoint = ContinuousClock.now
 
     /// Live playback position straight from the player, for smooth per-frame
     /// karaoke highlighting (the published `progress` is intentionally coarse).
     var livePlaybackTime: TimeInterval {
-        if let flacPlayer { return flacPlayer.position }
         let t = engine.currentTime().seconds
         return t.isFinite ? t : progress
     }
@@ -420,10 +412,6 @@ final class PlayerService: ObservableObject {
         if isPlaying {
             pause()
             return
-        } else if let flacPlayer {
-            flacPlayer.play()
-            isPlaying = true
-            scrobbleStartIfNeeded()
         } else if engine.currentItem == nil {
             // Restored session: re-resolve the source.
             startPlaying(track, resumeAt: progress)
@@ -440,7 +428,6 @@ final class PlayerService: ObservableObject {
         beginPlaybackIntent()
         fmRequestID = nil
         engine.pause()
-        flacPlayer?.pause()
         isPlaying = false
         AudioSpectrum.shared.reset()
         NowPlayingManager.shared.updateElapsed(progress, rate: 0)
@@ -482,17 +469,6 @@ final class PlayerService: ObservableObject {
     }
 
     func seek(to seconds: TimeInterval, completion: (@MainActor () -> Void)? = nil) {
-        if let flacPlayer {
-            flacPlayer.seek(to: seconds)
-            progress = seconds
-            updateLyricsCursor(at: seconds)
-            NowPlayingManager.shared.updateElapsed(seconds, rate: isPlaying ? 1 : 0)
-            persistState()
-            if let completion {
-                Task { @MainActor in completion() }
-            }
-            return
-        }
         progress = seconds
         updateLyricsCursor(at: seconds)
         engine.seek(to: CMTime(seconds: seconds, preferredTimescale: 600),
@@ -772,12 +748,6 @@ final class PlayerService: ObservableObject {
 
     // MARK: - Source resolution
 
-    /// 播放中改音质：按当前位置重新解析并装载，队列/歌词/进度都不丢。
-    func reloadCurrentTrackForQualityChange() {
-        guard let track = currentTrack else { return }
-        startPlaying(track, resumeAt: progress)
-    }
-
     private func startPlaying(_ track: Track,
                               localLease: OfflinePlaybackLease? = nil, resumeAt: TimeInterval = 0) {
         offlineScan?.cancel()
@@ -832,7 +802,7 @@ final class PlayerService: ObservableObject {
                                 localLease: OfflinePlaybackLease? = nil,
                                 skipsLocalCopies: Bool = false,
                                 resumeAt: TimeInterval = 0) async {
-        let quality = SettingsManager.shared.audioQuality.normalized.apiLevel
+        let quality = AudioQuality.exhigh.rawValue
         let cacheEnabled = SettingsManager.shared.enableAudioCache && !skipsLocalCopies
         lastResolveFailure = nil
         lastRefusalCode = nil
@@ -882,10 +852,10 @@ final class PlayerService: ObservableObject {
         }
 
         // ── 以下与最初版本（34737e1）逐字一致：取地址 → 直连 AVURLAsset → 装 item ──
-        let settingsQuality = SettingsManager.shared.audioQuality.normalized.apiLevel
+        let settingsQuality = AudioQuality.exhigh.rawValue
         var data = try? await MusicAPI.songURL(ids: [track.id], level: settingsQuality).first
-        if data?.url == nil, settingsQuality != AudioQuality.standard.apiLevel {
-            data = try? await MusicAPI.songURL(ids: [track.id], level: AudioQuality.standard.apiLevel).first
+        if data?.url == nil, settingsQuality != AudioQuality.standard.rawValue {
+            data = try? await MusicAPI.songURL(ids: [track.id], level: AudioQuality.standard.rawValue).first
         }
         guard generation == resolveGeneration else { return }
 
@@ -921,18 +891,10 @@ final class PlayerService: ObservableObject {
             ToastCenter.shared.show(String(localized: "VIP 歌曲，当前为试听片段"))
         }
 
-        // 无损 / Hi-Res / 母带：换帧精确引擎（见 flacPlayer 的注释）。
-        if data?.type?.lowercased() == "flac" {
-            await installFLACSource(url, for: track, generation: generation,
-                                    durationMS: data?.time, resumeAt: resumeAt)
-            return
-        }
-
         let asset = AVURLAsset(url: url)
         let assetTrack = await loadAudioTrack(from: asset, timeout: 2)
         guard generation == resolveGeneration else { return }
 
-        stopFLAC()
         let item = AVPlayerItem(asset: asset)
         if let assetTrack, let mix = AudioSpectrum.shared.makeAudioMix(for: assetTrack) {
             item.audioMix = mix
@@ -960,64 +922,6 @@ final class PlayerService: ObservableObject {
             duration = TimeInterval(time) / 1000
             NowPlayingManager.shared.updateMetadata(for: track, duration: duration)
         }
-    }
-
-    // MARK: - FLAC source
-
-    private func installFLACSource(_ url: URL, for track: Track, generation: Int,
-                                   durationMS: Int?, resumeAt: TimeInterval) async {
-        let remote = CDNHost.preferred(for: url)
-        do {
-            let local = try await FLACFileStore.localCopy(of: remote, trackID: track.id)
-            guard generation == resolveGeneration else { return }
-            stopFLAC()
-            let player = FLACFilePlayer()
-            try player.load(url: local, startAt: resumeAt, autoplay: false)
-            player.onEnded = { [weak self] in self?.handleItemEnded() }
-            player.setVolume(volume)
-            flacPlayer = player
-            if let ms = durationMS, ms > 0 {
-                duration = TimeInterval(ms) / 1000
-                NowPlayingManager.shared.updateMetadata(for: track, duration: duration)
-            }
-            if isPlaying {
-                player.play()
-                scrobbleStartIfNeeded()
-            }
-            startFLACTimer()
-        } catch {
-            print("FLAC load failed: \(error)")
-            handleUnplayable(track)
-        }
-    }
-
-    /// FLAC 分支的 0.2s 采样：歌词每 tick 跟，进度条/锁屏按 0.45s 阈值发布，
-    /// 与 AVPlayer 那条观察器保持同一节奏。
-    private func startFLACTimer() {
-        flacTimer?.invalidate()
-        flacTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                guard let self, let player = self.flacPlayer, !self.isScrubbing else { return }
-                let seconds = player.position
-                guard seconds.isFinite else { return }
-                self.updateLyricsCursor(at: seconds)
-                if abs(seconds - self.progress) > 0.45 {
-                    self.progress = seconds
-                    NowPlayingManager.shared.updateElapsed(seconds, rate: self.isPlaying ? 1 : 0)
-                }
-                if self.isPlaying, self.lastPlaybackCheckpoint.duration(to: .now) >= .seconds(20) {
-                    self.lastPlaybackCheckpoint = .now
-                    self.persistState()
-                }
-            }
-        }
-    }
-
-    private func stopFLAC() {
-        flacTimer?.invalidate()
-        flacTimer = nil
-        flacPlayer?.stop()
-        flacPlayer = nil
     }
 
     private func handleUnplayable(_ track: Track) {
@@ -1051,11 +955,33 @@ final class PlayerService: ObservableObject {
         // Skip a CDN host that just failed to connect (see CDNHost).
         let remote = CDNHost.preferred(for: url)
 
-        // 直接交给 AVPlayer 取字节：中间那层自建字节范围加载器会在拖动时
-        // 重排 Range、换到孪生 CDN 再拼接，AVPlayer 的时钟就和实际播出的帧脱钩，
-        // 表现为「进度条到位、声音没到位」（高档位文件大时才明显）。缓存仍然
-        // 服务于已下载 / 整首缓存的条目（loadFallbackCache 走本地文件）。
-        let asset = AVURLAsset(url: remote)
+        var asset = AVURLAsset(url: remote)
+        var resourceLoader: CachingAudioResourceLoader?
+        if SettingsManager.shared.enableAudioCache, !isTrial {
+            let cacheLimitMB = await SettingsManager.shared.effectiveAudioCacheSizeMB()
+            guard generation == resolveGeneration else { return }
+            do {
+                let loader = try CachingAudioResourceLoader(
+                    remoteURL: remote,
+                    trackID: track.id,
+                    requestedQuality: SettingsManager.shared.audioQuality.rawValue,
+                    servedQuality: servedQuality,
+                    source: .origin,
+                    maximumCacheSizeMB: cacheLimitMB
+                )
+                guard generation == resolveGeneration else {
+                    loader.cancel()
+                    return
+                }
+                let cachedAsset = AVURLAsset(url: loader.assetURL)
+                loader.attach(to: cachedAsset)
+                pendingAudioResourceLoader = loader
+                resourceLoader = loader
+                asset = cachedAsset
+            } catch {
+                print("Audio source will play without caching: \(error)")
+            }
+        }
 
         await installResolvedAsset(
             asset,
@@ -1063,7 +989,7 @@ final class PlayerService: ObservableObject {
             generation: generation,
             durationMS: durationMS,
             remoteURL: remote,
-            resourceLoader: nil,
+            resourceLoader: resourceLoader,
             resumeAt: resumeAt
         )
     }
@@ -1273,7 +1199,6 @@ final class PlayerService: ObservableObject {
     }
 
     private func releaseCurrentPlaybackResources() {
-        stopFLAC()
         let resourceLoader = audioResourceLoader
         let cacheLease = audioCacheLease
         audioResourceLoader = nil

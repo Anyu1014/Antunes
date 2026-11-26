@@ -2638,7 +2638,6 @@ private struct MinimalTransportControls: View {
 
 struct NowPlayingScrubber: View {
     @EnvironmentObject private var player: PlayerService
-    @EnvironmentObject private var settings: SettingsManager
     @ObservedObject private var clock = PlayerService.shared.clock
 
     @State private var isHovering = false
@@ -2698,49 +2697,7 @@ struct NowPlayingScrubber: View {
             }
             .font(.system(size: 10.5).monospacedDigit())
             .foregroundStyle(.white.opacity(0.55))
-            // 进度条正中间那颗音质胶囊：显示正在播的实际档位，点开可换档。
-            .overlay { qualityPicker }
         }
-    }
-
-    /// 实时显示「实际在播的档位」（`servedQuality`），解析中回落到设置里的档位。
-    private var currentQualityName: String {
-        let served = player.servedQuality.flatMap(AudioQuality.init(rawValue:))
-        return (served ?? settings.audioQuality.normalized).displayName
-    }
-
-    private var qualityPicker: some View {
-        Menu {
-            ForEach(AudioQuality.selectable) { quality in
-                Button {
-                    guard settings.audioQuality.normalized != quality else { return }
-                    settings.audioQuality = quality
-                    player.reloadCurrentTrackForQualityChange()
-                } label: {
-                    if settings.audioQuality.normalized == quality {
-                        Label(quality.displayName, systemImage: "checkmark")
-                    } else {
-                        Text(quality.displayName)
-                    }
-                }
-            }
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "waveform")
-                    .font(.system(size: 9, weight: .semibold))
-                Text(currentQualityName)
-                    .font(.system(size: 10.5, weight: .medium))
-            }
-            .foregroundStyle(.white.opacity(0.72))
-            .padding(.horizontal, 9)
-            .padding(.vertical, 3)
-            .background(.white.opacity(0.12), in: Capsule())
-        }
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .disabled(player.currentTrack == nil)
-        .accessibilityLabel("音质")
-        .accessibilityValue(currentQualityName)
     }
 
     private var thumbDiameter: CGFloat {

@@ -310,29 +310,11 @@ final class MusicApi {
             return result;
         } finally { con.disconnect(); }
     }
-    /** 音质档位，从高到低；与 /song/enhance/player/url/v1 的 level 取值一致。 */
-    static final java.util.List<String> QUALITY_LEVELS =
-            java.util.List.of("jymaster", "sky", "jyeffect", "hires", "lossless", "exhigh", "standard");
-
-    static String normalizeQuality(String value) {
-        if (value == null) return "exhigh";
-        String trimmed = value.trim();
-        if (trimmed.isEmpty() || "higher".equals(trimmed)) return "exhigh";
-        return QUALITY_LEVELS.contains(trimmed) ? trimmed : "exhigh";
-    }
-
-    /** 从请求档位开始往下降，直到标准档。 */
-    static java.util.List<String> qualityFallbacks(String requested) {
-        int start = QUALITY_LEVELS.indexOf(normalizeQuality(requested));
-        return QUALITY_LEVELS.subList(start < 0 ? QUALITY_LEVELS.size() - 2 : start, QUALITY_LEVELS.size());
-    }
-
     String audioURL(long id, String requestedQuality) throws Exception {
-        // 该档拿不到地址时逐档下降；只对「没有 url」降档，拿到地址就用。
-        for (String quality : qualityFallbacks(requestedQuality)) {
+        // 音质固定「极高」（与 iOS 19:58 版一致）。
+        {
             JSONObject payload = new JSONObject()
-                    .put("ids", "["+id+"]").put("level", quality).put("encodeType", "flac");
-            if ("sky".equals(quality)) payload.put("immerseType", "c51");
+                    .put("ids", "["+id+"]").put("level", "exhigh").put("encodeType", "flac");
             JSONObject result = request("/song/enhance/player/url/v1", payload);
             JSONObject found = result.getJSONArray("data").getJSONObject(0);
             String url = found.optString("url", "");

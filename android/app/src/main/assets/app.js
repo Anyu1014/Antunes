@@ -1735,7 +1735,6 @@ function selectRow(label,key,items,onChange){
 function bindChange(fn){return `data-change="${bind(fn).match(/"(\d+)"/)[1]}"`;}
 function toggleRow(label,key,after,defaultValue=false){return `<label class="list-row"><span>${e(label)}</span><input class="toggle" type="checkbox" aria-label="${e(label)}" ${(prefs[key]??defaultValue)?'checked':''} ${bindChange(ev=>{prefs[key]=ev.target.checked;savePrefs();if(after)after();})}></label>`;}
 // 音质七档：与 iOS / 备用源码 MeloX 同序同值，level 直接发给 /song/enhance/player/url/v1。
-const QUALITY_OPTIONS=[['standard','标准'],['exhigh','极高'],['lossless','无损'],['hires','Hi-Res'],['jyeffect','高清环绕声'],['sky','沉浸环绕声'],['jymaster','超清母带']];
 // 设置里的顺序必须与底栏从左到右一致：直接复用 navigationTabs 的排序结果
 const SECTION_DEFS=[['home','推荐','showHome'],['explore','精选','showExplore'],['fm','漫游','showFM'],['library','我的','showLibrary'],['search','搜索','showSearch']];
 // 三个点：点开是「移到顶部 / 上移 / 下移 / 移到底部」，不再用手势拖动。
@@ -1810,7 +1809,7 @@ function collectionCoverSettingsRows(){
 }
 function settingsHTML(expanded=new Set()){
   // 音质七档（与备用源码 MeloX 一致）：选到的档位拿不到时自动往下降。
-  let html=`<div class="group-label">播放</div><div class="group">${selectRow('音质','quality',QUALITY_OPTIONS,v=>native('quality',{value:v}).catch(()=>{}))}${selectRow('下载音质','downloadQuality',QUALITY_OPTIONS,v=>native('downloadQuality',{value:v}).catch(()=>{}))}${listRow('音效','eq',openEQ)}${listRow('睡眠定时','clock',openSleep)}</div>`;
+  let html=`<div class="group-label">播放</div><div class="group">${listRow('音质','eq',()=>toast('当前固定为极高音质'),'<span class="row-value">极高</span>')}${listRow('音效','eq',openEQ)}${listRow('睡眠定时','clock',openSleep)}</div>`;
   html+=`<div class="group-label">启动</div><div class="group">${selectRow('冷启动板块','startTab',[['auto','自动（第一个板块）'],['home','推荐'],['explore','精选'],['fm','漫游'],['library','我的'],['search','搜索']])}</div>`;
   const sectionGroup=(title,content,note='')=>`<details data-section-group="${title}"${expanded.has(title)?' open':''}><summary>${title}</summary>${content}${note?`<p class="group-note">${note}</p>`:''}</details>`;
   const recommendationRows=[...Object.entries(HOME_CARD_TITLES),...HOME_SLOTS.map(slot=>[slot,HOME_SLOT_TITLES[slot]]),...Object.entries(HOME_EXTRA_TITLES)]

@@ -93,8 +93,7 @@ public class MainActivity extends Activity {
                     case "control":ui.post(()->control(a));break;
                     // 音质七档（与 MeloX 一致）：写进偏好，播放时按档位请求，
                     // 拿不到会自动往下降。
-                    case "quality":getSharedPreferences("player",MODE_PRIVATE).edit().putString("quality",MusicApi.normalizeQuality(a.optString("value"))).apply();break;
-                    case "downloadQuality":getSharedPreferences("player",MODE_PRIVATE).edit().putString("download_quality",MusicApi.normalizeQuality(a.optString("value"))).apply();break;
+                    case "quality":getSharedPreferences("player",MODE_PRIVATE).edit().putString("quality","exhigh").apply();break;
                     case "eq":
                         JSONArray bands=a.getJSONArray("bands");if(bands.length()!=10)throw new Exception("音效参数无效");for(int n=0;n<10;n++)if(Math.abs(bands.getInt(n))>12)throw new Exception("音效参数无效");
                         getSharedPreferences("player",MODE_PRIVATE).edit().putString("eq",bands.toString()).putBoolean("eqEnabled",a.optBoolean("enabled")).apply();ui.post(()->{if(PlaybackService.current!=null)PlaybackService.current.applyEQ();});break;
@@ -211,8 +210,7 @@ public class MainActivity extends Activity {
     }
     synchronized JSONObject download(JSONObject track)throws Exception{
         long id=track.getLong("id");if(id<=0)throw new Exception("歌曲无效");
-        // 下载走单独的「下载音质」，与播放音质解耦。
-        String url=api.audioURL(id,getSharedPreferences("player",MODE_PRIVATE).getString("download_quality",getSharedPreferences("player",MODE_PRIVATE).getString("quality","exhigh")));
+        String url=api.audioURL(id,getSharedPreferences("player",MODE_PRIVATE).getString("quality","exhigh"));
         File dir=new File(getFilesDir(),"audio");if(!dir.isDirectory()&&!dir.mkdirs())throw new IOException("下载目录创建失败");
         File tmp=new File(dir,id+".part");HttpURLConnection con=(HttpURLConnection)new URL(url).openConnection();con.setInstanceFollowRedirects(false);con.setConnectTimeout(15000);con.setReadTimeout(30000);
         try{
