@@ -2193,7 +2193,11 @@ function openQueue(){openPlayPanel('queue','播放队列',`<div class="detail-to
 window.addEventListener('playback',({detail:s})=>{
   PlaybackLive=true;const previous=player.queue[player.index],wasPlaying=player.playing,wasFM=player.fm;player={...player,...s};lyricSync=Date.now();const t=player.queue[player.index];
   const trackChanged=t?.id!==previous?.id;const chromeChanged=trackChanged||wasPlaying!==player.playing;
-  if(trackChanged&&t){lastTrackID=t.id;const recent=[t,...read('recents',[]).filter(x=>x.id!==t.id)].slice(0,200);write('recents',recent);if(lyricID!==t.id)loadLyrics(t.id);if(overlayKind==='nowPlaying'){$('#overlay').innerHTML=nowPlayingHTML(t);setupSeek();setupPager();setupCommentsSwipe();setupDismissDrag();loadNowComments(t);wireNowPlaying();if(showLyric)renderLyrics();}document.querySelectorAll('[data-track-id]').forEach(n=>n.classList.toggle('current',Number(n.dataset.trackId)===t.id));}
+  if(trackChanged&&t){lastTrackID=t.id;const recent=[t,...read('recents',[]).filter(x=>x.id!==t.id)].slice(0,200);write('recents',recent);if(lyricID!==t.id)loadLyrics(t.id);if(overlayKind==='nowPlaying'){$('#overlay').innerHTML=nowPlayingHTML(t);
+      // 播放页已经开着，只是换了首歌：不要再放一次「从底部升起」的入场动画，
+      // 否则替换 DOM 的瞬间会看到主界面在底下闪一下。
+      const npNow=document.querySelector('.now-playing');if(npNow)npNow.style.animation='none';
+      setupSeek();setupPager();setupCommentsSwipe();setupDismissDrag();loadNowComments(t);wireNowPlaying();if(showLyric)renderLyrics();}document.querySelectorAll('[data-track-id]').forEach(n=>n.classList.toggle('current',Number(n.dataset.trackId)===t.id));}
   if(trackChanged&&player.fm&&player.index>=player.queue.length-2)fmRefill();
   if(trackChanged)updatePlaylistLocator();
   if((trackChanged||wasPlaying!==player.playing||wasFM!==player.fm)&&route.kind==='fm')syncFmPage();
