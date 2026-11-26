@@ -39,7 +39,7 @@ final class MusicApi {
         "/playlist/create", "/playlist/desc/update", "/playlist/remove", "/playlist/subscribe", "/playlist/unsubscribe", "/playlist/manipulate/tracks",
         "/album/sub", "/album/unsub", "/artist/sub", "/artist/unsub", "/v1/discovery/simiSong",
         "/v1/radio/get", "/radio/trash/add", "/v1/play/record", "/msg/private/users", "/msg/private/history", "/msg/private/send",
-        "/v1/comment/like", "/v1/comment/unlike", "/cloud/get", "/cloud/del", "/play-record/song/list", "/feedback/weblog");
+        "/v1/comment/like", "/v1/comment/unlike", "/radio/like", "/like", "/cloud/get", "/cloud/del", "/play-record/song/list", "/feedback/weblog");
     MusicApi(Context context) throws Exception {
         prefs = context.getSharedPreferences("api", Context.MODE_PRIVATE);
         String device = prefs.getString("device", "");
@@ -330,6 +330,9 @@ final class MusicApi {
     /** 上一次 audioURL 实际拿到的档位（阶梯降档后会变），供播放服务展示。 */
     volatile String lastResolvedLevel = "";
 
+    /** 上一次 audioURL 实际拿到的文件类型（mp3 / flac），用来决定要不要走本地整曲播放。 */
+    volatile String lastResolvedType = "";
+
     String audioURL(long id, String requestedQuality) throws Exception {
         // 该档拿不到地址时逐档下降；只对「没有 url」降档，拿到地址就用。
         for (String quality : qualityFallbacks(requestedQuality)) {
@@ -342,6 +345,7 @@ final class MusicApi {
             if (!url.isEmpty() && !url.equals("null")) {
                 // 服务端会把无损以上的档位一律回成 level=lossless，但码率能看出真实档位。
                 lastResolvedLevel = servedLevel(found.optInt("br",0), found.optString("type",""));
+                lastResolvedType = found.optString("type","");
                 return checkedMediaURL(url);
             }
         }
