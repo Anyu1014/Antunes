@@ -1060,3 +1060,6 @@ body.chrome-hidden #chrome{display:none}
 .quality-row{display:flex;align-items:center;justify-content:space-between;height:46px;padding:0 4px;
   background:none;border:0;color:var(--text);font-size:15px;text-align:left}
 .quality-row .tick{color:var(--accent);font-weight:700}
+
+/* 「已下载」的排序按钮水平居中（.chip-row 本身没有布局规则，默认靠左） */
+.chip-row.download-sort{display:flex;width:100%;flex-wrap:wrap;gap:8px;justify-content:center;padding:4px 24px 16px}
