@@ -46,7 +46,7 @@ struct IOSPlaybackQueueView: View {
 
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(spacing: 2) {
+                    LazyVStack(spacing: 8) {
                         PlaybackHandoffList()
                         ForEach(entries) { entry in
                             PlaybackQueueRow(entry: entry)
