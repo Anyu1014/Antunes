@@ -359,7 +359,7 @@ public struct IOSMainWindow: View {
             let layout = horizontal
                 ? AnyLayout(HStackLayout(spacing: 10))
                 : AnyLayout(VStackLayout(spacing: 8))
-            let playerWidth = min(316, max(200, (size.width - 36) * 0.36))
+            let playerWidth = min(316, max(256, (size.width - 36) * 0.36))
             let barHeight = Theme.Layout.FloatingChrome.tabBarHeight
             let bottomOffset: CGFloat = -14
             let landscapeBottomInset: CGFloat = 20
@@ -1023,6 +1023,7 @@ struct IOSMiniPlayerBar: View {
 
     @EnvironmentObject private var player: PlayerService
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.openDestination) private var openDestination
     let presentation: Presentation
     var overlayHeight: CGFloat? = nil
     var onToggleLyrics: (() -> Void)?
@@ -1033,11 +1034,12 @@ struct IOSMiniPlayerBar: View {
     /// 所以长按之后松手同样会「进入播放页」；记下长按时刻，把紧跟着的那次
     /// 抬手当成无效动作丢掉——长按只算按住，不产生跳转。
     @State private var longPressAt: Date?
+    @State private var showPlaybackQueue = false
 
     var body: some View {
         playerBarSurface
             .background {
-                // 胶囊里封面和三个按钮之外的留白，也算「轻点一次进入」，
+                // 胶囊里封面和控制按钮之外的留白，也算「轻点一次进入」，
                 // 免得点了条子却没反应。
                 Color.clear
                     .contentShape(Rectangle())
@@ -1048,6 +1050,14 @@ struct IOSMiniPlayerBar: View {
                     .onEnded { _ in longPressAt = Date() }
             )
             .simultaneousGesture(expandGesture)
+            .sheet(isPresented: $showPlaybackQueue) {
+                IOSPlaybackQueueView()
+                    .modifier(OfflinePlaybackAlert(player: player, onDownloads: {
+                        showPlaybackQueue = false
+                        openDestination(.downloaded)
+                    }))
+                    .modifier(MeteredDownloadAlert())
+            }
     }
 
     /// 轻点一次进入播放页；长按之后的那次抬手不算。
@@ -1121,6 +1131,19 @@ struct IOSMiniPlayerBar: View {
                 }
                 .buttonStyle(.pressable)
                 .accessibilityLabel("下一首")
+
+                Button {
+                    showPlaybackQueue = true
+                } label: {
+                    Image(systemName: "list.bullet")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.pressable)
+                .accessibilityLabel("播放列表")
+                .accessibilityIdentifier("mini-player-queue")
             }
         }
         .padding(.leading, 12)

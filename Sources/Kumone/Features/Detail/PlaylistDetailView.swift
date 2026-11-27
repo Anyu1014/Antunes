@@ -24,6 +24,8 @@ struct PlaylistDetailView: View {
     @State private var showFullDescription = false
     #if os(iOS)
     @Environment(\.dismiss) private var dismissPlaylist
+    @Environment(\.miniPlayerFrame) private var miniPlayerFrame
+    @Environment(\.floatingChromeClearance) private var floatingChromeClearance
     @State private var playlistWasDeleted = false
     /// 页面可用尺寸：横屏时顶部信息要按「小播放器右边缘」收窄，需要真实窗口宽度。
     @State private var containerSize: CGSize = .zero
@@ -373,6 +375,16 @@ struct PlaylistDetailView: View {
             }
         } rows: {
             playlistBody.id("playlistTop")
+        }
+        .overlay {
+            GeometryReader { geo in
+                let clearance = miniPlayerFrame.map { max(0, geo.frame(in: .global).maxY - $0.minY) }
+                    ?? floatingChromeClearance ?? Theme.Layout.playerChromeClearance
+                currentTrackLocator
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                    .padding(.trailing, 16)
+                    .padding(.bottom, clearance + 24)
+            }
         }
     }
 

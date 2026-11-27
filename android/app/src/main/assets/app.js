@@ -497,7 +497,7 @@ function renderChrome(){
   $('#page').classList.toggle('library-only',!showNavigation);
   const key=`${t?t.id:'-'}|${tabs.length}|${tabs.map(x=>x[0]).join('')}|${lyricsBar?1:0}${tabsExpanded?1:0}|${selecting?1:0}${picked.size}|${(account?.avatarUrl||prefs.avatarUrl)?'a':'u'}`;
   if(!t)tabsExpanded=false;
-  if(key!==chromeKey){chromeKey=key;chrome.innerHTML=(t?`<div class="mini glass" ${bind(()=>openNowPlaying(true))}>${button(cover(t.cover,'mini-cover'),()=>openNowPlaying(true),'','打开正在播放')}${button(`<strong>${e(t.name)}</strong><small>${e(t.artist)}</small>`,()=>openNowPlaying(true),'mini-info','打开正在播放')}${round(player.fm?'trash':'previous',()=>player.fm?fmTrash():control('previous'),player.fm?'不喜欢，换一首':'上一首')}${round(player.playing?'pause':'play',()=>control('toggle'),'播放或暂停','mini-toggle')}${round('next',()=>control('next'),'下一首')}</div>`:'')+`<div class="bar-row${lyricsBar&&t?' has-lyric':''}${lyricsBar&&t&&tabsExpanded&&tabs.length>=4?' lyric-as-word':''}">`+(t&&lyricsBar?(tabsExpanded&&tabs.length>=4?button('<span class="lyric-glyph">词</span>',()=>toggleNav(false),'round lyric-collapsed glass','展开歌词'):`<div class="lyric-row"><div class="lyric-bar glass"><div class="lyric-viewport"><div class="lyric-track"></div></div></div></div>`):'')+(showNavigation?(lyricsBar&&t&&!tabsExpanded?button((tabs.length===1&&tabs[0][0]!=='library')?`<span class="avatar-button-icon">${icon(tabs[0][2])}</span>`:(account?.avatarUrl||prefs.avatarUrl?cover(account?.avatarUrl||prefs.avatarUrl,'avatar-button-img'):`<span class="avatar-button-icon">${icon('user')}</span>`),()=>toggleNav(true),'avatar-button glass','展开导航'):`<div class="tab-row"><nav class="tabs glass" aria-label="主导航" style="--tab-count:${tabs.length}">${tabs.map(([key,label,name])=>button(icon(key==='library'?'navUser':name,(key==='search'||key==='fm')?'nav-line':'')+`<span>${label}</span>`,()=>switchTab(key),`tab ${tab===key?'active':''}`,label)).join('')}</nav></div>`):'')+`</div>`+(selecting&&listTracks.length?selectBar(listTracks):'');}
+  if(key!==chromeKey){chromeKey=key;chrome.innerHTML=(t?`<div class="mini glass" ${bind(()=>openNowPlaying(true))}>${button(cover(t.cover,'mini-cover'),()=>openNowPlaying(true),'','打开正在播放')}${button(`<strong>${e(t.name)}</strong><small>${e(t.artist)}</small>`,()=>openNowPlaying(true),'mini-info','打开正在播放')}${round(player.fm?'trash':'previous',()=>player.fm?fmTrash():control('previous'),player.fm?'不喜欢，换一首':'上一首')}${round(player.playing?'pause':'play',()=>control('toggle'),'播放或暂停','mini-toggle')}${round('next',()=>control('next'),'下一首')}${round('queue',openQueue,'播放列表','mini-queue')}</div>`:'')+`<div class="bar-row${lyricsBar&&t?' has-lyric':''}${lyricsBar&&t&&tabsExpanded&&tabs.length>=4?' lyric-as-word':''}">`+(t&&lyricsBar?(tabsExpanded&&tabs.length>=4?button('<span class="lyric-glyph">词</span>',()=>toggleNav(false),'round lyric-collapsed glass','展开歌词'):`<div class="lyric-row"><div class="lyric-bar glass"><div class="lyric-viewport"><div class="lyric-track"></div></div></div></div>`):'')+(showNavigation?(lyricsBar&&t&&!tabsExpanded?button((tabs.length===1&&tabs[0][0]!=='library')?`<span class="avatar-button-icon">${icon(tabs[0][2])}</span>`:(account?.avatarUrl||prefs.avatarUrl?cover(account?.avatarUrl||prefs.avatarUrl,'avatar-button-img'):`<span class="avatar-button-icon">${icon('user')}</span>`),()=>toggleNav(true),'avatar-button glass','展开导航'):`<div class="tab-row"><nav class="tabs glass" aria-label="主导航" style="--tab-count:${tabs.length}">${tabs.map(([key,label,name])=>button(icon(key==='library'?'navUser':name,(key==='search'||key==='fm')?'nav-line':'')+`<span>${label}</span>`,()=>switchTab(key),`tab ${tab===key?'active':''}`,label)).join('')}</nav></div>`):'')+`</div>`+(selecting&&listTracks.length?selectBar(listTracks):'');}
   const toggle=chrome.querySelector('.mini-toggle');
   if(toggle)toggle.innerHTML=icon(player.playing?'pause':'play');
   chrome.querySelectorAll('.tab').forEach((b,i)=>b.classList.toggle('active',tabs[i][0]===tab));
@@ -895,7 +895,7 @@ function locateCurrentTrack(){
   $(`.playlist-track[data-track-id="${t.id}"]`)?.scrollIntoView({block:'center',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});
 }
 function updatePlaylistLocator(){
-  const actions=$('.playlist-actions');if(!actions)return;
+  const actions=$('.collection-locator')||$('.playlist-actions');if(!actions)return;
   const current=actions.querySelector('.playlist-locate'),t=player.queue[player.index];
   if(t&&listTracks.some(item=>item.id===t.id)){if(!current)actions.insertAdjacentHTML('beforeend',playlistLocateButton(listTracks));}
   else current?.remove();
@@ -1060,6 +1060,7 @@ function gradientCollectionHTML(info,items,kind){
       <div id="playlist-search" class="playlist-search hidden">${icon('search')}<input type="search" placeholder="搜索列表内歌曲" aria-label="搜索列表内歌曲"></div>
       ${isPlaylist?playlistRowsHTML(items):tracksHTML(items,true)}
     </div>
+    ${isPlaylist?'<div class="collection-locator">'+playlistLocateButton(items)+'</div>':''}
   </div>`;
 }
 function toggleGradientSearch(){
@@ -1872,7 +1873,7 @@ function openPlayPanel(kind,title,html,after){
   closePlayPanel();
   let l=document.getElementById('np-float');
   if(!l){l=document.createElement('div');l.id='np-float';l.className='np-float';document.body.appendChild(l);}
-  l.innerHTML=`<div class="np-float-scrim"></div><section class="play-panel" role="dialog" aria-label="${e(title)}"><div class="np-grab"><i></i></div><header class="pp-head"><strong>${e(title)}</strong><button class="pp-done" aria-label="完成">完成</button></header><div class="pp-body">${html}</div></section>`;
+  l.innerHTML=`<div class="np-float-scrim"></div><section class="play-panel${kind==='queue'?' queue-panel':''}" role="dialog" aria-label="${e(title)}"><div class="np-grab"><i></i></div><header class="pp-head"><strong>${e(title)}</strong><button class="pp-done" aria-label="完成">完成</button></header><div class="pp-body">${html}</div></section>`;
   playPanelKind=kind;
   l.querySelector('.np-float-scrim').addEventListener('click',closePlayPanel);
   l.querySelector('.pp-done').addEventListener('click',closePlayPanel);
@@ -2276,7 +2277,7 @@ document.addEventListener('keydown',event=>{
 });
 document.addEventListener('contextmenu',ev=>{const row=ev.target.closest('.playlist-track');if(!row)return;ev.preventDefault();if(ev.target.closest('.playlist-reorder'))return;const index=listTracks.findIndex(t=>t.id===Number(row.dataset.trackId));if(index>=0)trackMenu(listTracks[index],index);});
 document.addEventListener('change',ev=>{const el=ev.target.closest('[data-change]');if(!el)return;const fn=callbacks.get(el.dataset.change);if(fn)Promise.resolve().then(()=>fn(ev)).catch(errorToast);});
-window.addEventListener('android-back',()=>{if(route.kind===tab&&!history.length&&!overlayKind){toast('Antunes 已在前台，音乐可在后台继续播放');return;}back();});
+window.addEventListener('android-back',()=>{if(playPanelKind==='queue'){closePlayPanel();return;}if(route.kind===tab&&!history.length&&!overlayKind){toast('Antunes 已在前台，音乐可在后台继续播放');return;}back();});
 async function boot(){applyTheme();if(!prefs.ambientOffMigrated){prefs.ambient=false;prefs.ambientOffMigrated=true;write('preferences',prefs);}
   // 搜索板块改为默认关闭：只在从没迁移过时改一次，之后用户自己开的不会被覆盖。
   // 「我的」只有在其它四个板块都关闭时才允许关闭；老数据里若出现非法组合，启动时纠正。

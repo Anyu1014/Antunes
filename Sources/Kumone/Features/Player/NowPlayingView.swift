@@ -115,17 +115,6 @@ struct NowPlayingView: View {
                     .padding(.trailing, 20)
                 }
             }
-            #if os(iOS)
-            .overlay {
-                if settings.nowPlayingMode == .minimal && showQueueOnMobile {
-                    Color.clear
-                        .contentShape(Rectangle())
-                        .onTapGesture { showQueueOnMobile = false }
-                        .accessibilityLabel("关闭播放列表")
-                        .accessibilityAddTraits(.isButton)
-                }
-            }
-            #endif
         }
         #if os(macOS)
         // The window toolbar is hidden while this page is up, but SwiftUI keeps
@@ -141,8 +130,16 @@ struct NowPlayingView: View {
             settings: settings
         )
         .modifier(OfflinePlaybackAlert(player: player, onDownloads: { onOpenDestination(.downloaded) },
-            enabled: player.showNowPlaying && !(settings.nowPlayingMode == .minimal && showQueueOnMobile)))
-        .modifier(MeteredDownloadAlert(enabled: player.showNowPlaying && !(settings.nowPlayingMode == .minimal && showQueueOnMobile)))
+            enabled: player.showNowPlaying && !showQueueOnMobile))
+        .modifier(MeteredDownloadAlert(enabled: player.showNowPlaying && !showQueueOnMobile))
+        .sheet(isPresented: $showQueueOnMobile) {
+            IOSPlaybackQueueView()
+                .modifier(OfflinePlaybackAlert(player: player, onDownloads: {
+                    showQueueOnMobile = false
+                    onOpenDestination(.downloaded)
+                }))
+                .modifier(MeteredDownloadAlert())
+        }
         #endif
         #if os(iOS)
         .task(id: currentArtworkURL) {
@@ -412,7 +409,7 @@ struct NowPlayingView: View {
 
     private func vinylCompactLayout(size: CGSize) -> some View {
         let discDimension = min(size.width - 64, size.height * 0.42, 320)
-        let showsVinyl = !showLyricsOnMobile && !showQueueOnMobile
+        let showsVinyl = !showLyricsOnMobile
 
         return VStack(spacing: 0) {
             #if os(iOS)
@@ -467,14 +464,6 @@ struct NowPlayingView: View {
                         Spacer(minLength: 0)
                     }
                     .transition(.opacity.combined(with: .scale(scale: 0.95)))
-                } else if showQueueOnMobile {
-                    #if os(iOS)
-                    CompactQueueContent()
-                        .transition(.opacity)
-                    #else
-                    lyricsColumn
-                        .transition(.opacity)
-                    #endif
                 } else {
                     #if os(iOS)
                     NowPlayingLyricsPager(isShown: true, horizontalInset: 32) {
@@ -558,7 +547,7 @@ struct NowPlayingView: View {
     #if os(iOS)
     private func immersiveCompactLayout(size: CGSize) -> some View {
         let artworkDimension = min(size.width - 112, size.height * 0.3, 250)
-        let showsExpandedArtwork = !showLyricsOnMobile && !showQueueOnMobile
+        let showsExpandedArtwork = !showLyricsOnMobile
 
         return VStack(spacing: 0) {
             Color.clear.frame(
@@ -580,17 +569,12 @@ struct NowPlayingView: View {
                     .allowsHitTesting(showsExpandedArtwork)
                     .accessibilityHidden(!showsExpandedArtwork)
 
-                if showQueueOnMobile {
-                    CompactQueueContent()
-                        .transition(.opacity)
-                } else {
-                    NowPlayingLyricsPager(isShown: showLyricsOnMobile, horizontalInset: 32) {
-                        IOSImmersiveLyricsColumn(isVisible: showLyricsOnMobile)
-                    }
-                        .opacity(showLyricsOnMobile ? 1 : 0)
-                        .allowsHitTesting(showLyricsOnMobile)
-                        .accessibilityHidden(!showLyricsOnMobile)
+                NowPlayingLyricsPager(isShown: showLyricsOnMobile, horizontalInset: 32) {
+                    IOSImmersiveLyricsColumn(isVisible: showLyricsOnMobile)
                 }
+                .opacity(showLyricsOnMobile ? 1 : 0)
+                .allowsHitTesting(showLyricsOnMobile)
+                .accessibilityHidden(!showLyricsOnMobile)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -690,7 +674,7 @@ struct NowPlayingView: View {
                     value: .bounds
                 ) { [.expanded: $0] }
             MiniLyricsView(
-                isVisible: !showLyricsOnMobile && !showQueueOnMobile,
+                isVisible: !showLyricsOnMobile,
                 onOpen: showImmersiveLyrics
             )
             .frame(maxWidth: .infinity, maxHeight: 96)
@@ -728,38 +712,20 @@ struct NowPlayingView: View {
     }
 
     private func toggleImmersiveLyrics() {
-        withAnimation(ImmersiveArtworkTransition.animation) {
-            if showQueueOnMobile {
-                showQueueOnMobile = false
-                showLyricsOnMobile = true
-            } else {
-                showLyricsOnMobile.toggle()
-            }
-        }
+        withAnimation(ImmersiveArtworkTransition.animation) { showLyricsOnMobile.toggle() }
     }
 
     private func showImmersiveLyrics() {
-        withAnimation(ImmersiveArtworkTransition.animation) {
-            showQueueOnMobile = false
-            showLyricsOnMobile = true
-        }
+        withAnimation(ImmersiveArtworkTransition.animation) { showLyricsOnMobile = true }
     }
 
-    /// Tapping the top-left cover while lyrics/queue are up returns to the
-    /// expanded artwork — the Apple Music gesture requested in #50. Idempotent,
-    /// so a tap while already expanded is a harmless no-op.
     private func collapseImmersiveArtwork() {
-        guard showLyricsOnMobile || showQueueOnMobile else { return }
-        withAnimation(ImmersiveArtworkTransition.animation) {
-            showLyricsOnMobile = false
-            showQueueOnMobile = false
-        }
+        guard showLyricsOnMobile else { return }
+        withAnimation(ImmersiveArtworkTransition.animation) { showLyricsOnMobile = false }
     }
 
     private func toggleImmersiveQueue() {
-        withAnimation(ImmersiveArtworkTransition.animation) {
-            showQueueOnMobile.toggle()
-        }
+        showQueueOnMobile = true
     }
 
     private func minimalCompactLayout(size: CGSize) -> some View {
@@ -842,11 +808,7 @@ struct NowPlayingView: View {
             NowPlayingScrubber()
                 .padding(.horizontal, 2)
                 .padding(.top, 16)
-            MinimalTransportControls(
-                backdrop: colors,
-                showQueue: $showQueueOnMobile,
-                onOpenDestination: onOpenDestination
-            )
+            MinimalTransportControls(showQueue: $showQueueOnMobile)
                 .padding(.horizontal, 2)
         }
         .accessibilityIdentifier("immersiveControls")
@@ -1872,169 +1834,6 @@ private struct Triangle: Shape {
 }
 #endif
 
-private struct CompactQueueContent: View {
-    @EnvironmentObject private var player: PlayerService
-
-    var body: some View {
-        let entries = player.playbackList
-        VStack(alignment: .leading, spacing: 15) {
-            HStack(spacing: 10) {
-                modeButton(
-                    icon: "arrow.right",
-                    label: "顺序播放",
-                    isActive: !player.shuffleEnabled && player.repeatMode == .off,
-                    action: enableSequentialPlayback
-                )
-                modeButton(
-                    icon: "shuffle",
-                    label: player.shuffleEnabled ? "关闭随机播放" : "随机播放",
-                    isActive: player.shuffleEnabled,
-                    action: player.toggleShuffle
-                )
-                modeButton(
-                    icon: "repeat",
-                    label: "列表循环",
-                    isActive: player.repeatMode == .all
-                ) {
-                    player.repeatMode = player.repeatMode == .all ? .off : .all
-                }
-                modeButton(
-                    icon: "repeat.1",
-                    label: "单曲循环",
-                    isActive: player.repeatMode == .one
-                ) {
-                    player.repeatMode = player.repeatMode == .one ? .off : .one
-                }
-            }
-
-            HStack(alignment: .firstTextBaseline) {
-                Text("播放列表")
-                    .font(.title3.weight(.bold))
-                    .foregroundStyle(.white)
-                Spacer()
-                Text("\(entries.count) 首")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.46))
-            }
-
-            if entries.isEmpty {
-                VStack(spacing: 8) {
-                    PlaybackHandoffList()
-                    Image(systemName: "list.bullet")
-                        .font(.system(size: 28, weight: .light))
-                    Text("播放队列是空的")
-                        .font(.subheadline.weight(.semibold))
-                }
-                .foregroundStyle(.white.opacity(0.5))
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ScrollViewReader { proxy in
-                    ScrollView(showsIndicators: false) {
-                        LazyVStack(spacing: 4) {
-                            PlaybackHandoffList()
-                                .padding(.bottom, 4)
-                            ForEach(entries) { entry in
-                                CompactQueueRow(entry: entry)
-                                    .id(entry.id)
-                            }
-                        }
-                    }
-                    // 打开面板时把正在播的这首摆到列表正中（与竖屏播放列表一致）。
-                    .onAppear {
-                        guard let current = entries.first(where: { $0.isCurrent }) else { return }
-                        DispatchQueue.main.async {
-                            proxy.scrollTo(current.id, anchor: .center)
-                        }
-                    }
-                }
-                .mask(
-                    LinearGradient(
-                        colors: [.black, .black, .clear],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-            }
-        }
-        .padding(.top, 6)
-    }
-
-    private func modeButton(
-        icon: String,
-        label: LocalizedStringKey,
-        isActive: Bool,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(isActive ? Color.black.opacity(0.76) : .white.opacity(0.76))
-                .frame(maxWidth: .infinity, minHeight: 42)
-                .background(
-                    isActive ? AnyShapeStyle(.white.opacity(0.66)) : AnyShapeStyle(.white.opacity(0.1)),
-                    in: Capsule()
-                )
-        }
-        .buttonStyle(.pressable)
-        .accessibilityLabel(label)
-        .accessibilityAddTraits(isActive ? .isSelected : [])
-    }
-
-    private func enableSequentialPlayback() {
-        if player.shuffleEnabled {
-            player.toggleShuffle()
-        }
-        player.repeatMode = .off
-    }
-}
-
-private struct CompactQueueRow: View {
-    let entry: PlaybackQueuePlan.ListEntry
-    private var track: Track { entry.track }
-
-    @EnvironmentObject private var player: PlayerService
-
-    var body: some View {
-        Button {
-            player.jumpToPlaylistEntry(entry)
-        } label: {
-            HStack(spacing: 11) {
-                CachedAsyncImage(url: track.album.picUrl?.resizedImageURL(120), animated: false)
-                    .frame(width: 46, height: 46)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(track.name)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(entry.isCurrent ? Theme.accent : .white.opacity(0.9))
-                        .lineLimit(1)
-                    Text(track.artistNames)
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.48))
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 4)
-
-                if entry.isCurrent {
-                    PlayingIndicator(animating: player.isPlaying)
-                } else {
-                    Text(Formatters.duration(track.duration))
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.36))
-                }
-            }
-            .padding(.vertical, 4)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("\(track.name)，\(track.artistNames)")
-        .accessibilityAddTraits(entry.isCurrent ? .isSelected : [])
-    }
-}
-
-
-
 private struct IOSMinimalLyricsColumn: View {
     @EnvironmentObject private var player: PlayerService
     @ObservedObject private var clock = PlayerService.shared.clock
@@ -2532,9 +2331,7 @@ private struct MinimalTrackInfoRow: View {
 
 private struct MinimalTransportControls: View {
     @EnvironmentObject private var player: PlayerService
-    let backdrop: ArtworkColors
     @Binding var showQueue: Bool
-    let onOpenDestination: (Destination) -> Void
 
     var body: some View {
         HStack(spacing: 0) {
@@ -2576,26 +2373,6 @@ private struct MinimalTransportControls: View {
         }
         .foregroundStyle(.white)
         .buttonStyle(.pressable)
-        .sheet(isPresented: $showQueue) {
-            queueSheet
-                .modifier(OfflinePlaybackAlert(player: player, onDownloads: {
-                    showQueue = false
-                    onOpenDestination(.downloaded)
-                }, enabled: showQueue && player.showNowPlaying))
-                .modifier(MeteredDownloadAlert(enabled: showQueue && player.showNowPlaying))
-        }
-    }
-
-    @ViewBuilder
-    private var queueSheet: some View {
-        if #available(iOS 16.4, *) {
-            IOSPlaybackQueueView(backdrop: backdrop)
-                .presentationDetents([.fraction(0.5)])
-                .presentationBackgroundInteraction(.enabled)
-        } else {
-            IOSPlaybackQueueView(backdrop: backdrop)
-                .presentationDetents([.fraction(0.5)])
-        }
     }
 
     @ViewBuilder

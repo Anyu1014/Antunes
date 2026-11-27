@@ -131,13 +131,13 @@ final class NowPlayingManager {
         lastSungLine.isEmpty ? songTitle : lastSungLine
     }
 
-    /// 小字槽位：歌名 · 作者。歌词占了标题之后，这里要能认出是哪首歌。
+    /// 小字槽位：歌名 — 作者（破折号与字号等宽，系统播放器里最像一条横线）。歌词占了标题之后，这里要能认出是哪首歌。
     private var subtitle: String {
         switch (songTitle.isEmpty, artistLine.isEmpty) {
         case (true, true): return ""
         case (true, false): return artistLine
         case (false, true): return songTitle
-        default: return "\(songTitle) · \(artistLine)"
+        default: return "\(songTitle) — \(artistLine)"
         }
     }
 

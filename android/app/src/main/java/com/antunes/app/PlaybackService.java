@@ -93,7 +93,19 @@ public class PlaybackService extends Service {
                 boolean forceNetwork = pendingForceNetwork; pendingForceNetwork = false;
                 String url;
                 if (!forceNetwork && offline.exists()) { url = offline.getAbsolutePath(); servedQuality = "local"; }
-                else { url = api.audioURL(track.getLong("id"),getSharedPreferences("player",MODE_PRIVATE).getString("quality","exhigh")); servedQuality = api.lastResolvedLevel; }
+                else {
+                    String resolved = api.audioURL(track.getLong("id"),getSharedPreferences("player",MODE_PRIVATE).getString("quality","exhigh"));
+                    servedQuality = api.lastResolvedLevel;
+                    android.util.Log.i("Kumone", "resolved type="+api.lastResolvedType+" level="+servedQuality+" url="+resolved);
+                    // FLAC 按 iOS 的做法：整首落盘再播。MediaPlayer 直接吃网络流时 seek 只能靠
+                    // 码率估算字节位置，无损以上会落错地方；本地文件由解封装器建索引，才能按帧定位。
+                    if ("flac".equalsIgnoreCase(api.lastResolvedType)) {
+                        File cached = flacFile(track.getLong("id"));
+                        if (!cached.isFile() || cached.length() < 1_000_000) downloadFlac(resolved, cached);
+                        resolved = cached.getAbsolutePath();
+                    }
+                    url = resolved;
+                }
                 handler.post(() -> { if(token!=generation)return;
                   // 这一代要播的必须是队列里这一格，别把上一格的声音接上来。
                   JSONObject expect=queue.optJSONObject(index);
@@ -184,6 +196,27 @@ public class PlaybackService extends Service {
             equalizer.setEnabled(p.getBoolean("eqEnabled",false));
         }catch(Exception e){error="当前设备不支持音效处理";changed();}
     }
+    /** 无损以上（flac）整曲缓存目录，与 iOS 的 Caches/FLAC 对应。 */
+    File flacFile(long id) {
+        File dir = new File(getFilesDir(), "flac");
+        if (!dir.isDirectory()) dir.mkdirs();
+        return new File(dir, id + ".flac");
+    }
+
+    /** 整首下载（先写 .part 再改名，避免半截文件被当成缓存命中）。 */
+    void downloadFlac(String url, File target) throws Exception {
+        File part = new File(target.getPath() + ".part");
+        java.net.HttpURLConnection conn = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
+        conn.setConnectTimeout(15000); conn.setReadTimeout(30000);
+        try (java.io.InputStream in = conn.getInputStream();
+             java.io.FileOutputStream out = new java.io.FileOutputStream(part)) {
+            byte[] buf = new byte[64 * 1024];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+        } finally { conn.disconnect(); }
+        if (!part.renameTo(target)) { part.delete(); throw new java.io.IOException("缓存写入失败"); }
+    }
+
     void releasePlayer(){if(equalizer!=null){equalizer.release();equalizer=null;}if(player!=null){player.release();player=null;}prepared=false;}
     @Override public void onDestroy(){generation++;handler.removeCallbacksAndMessages(null);releasePlayer();worker.shutdownNow();if(session!=null)session.release();if(audio!=null&&focus!=null)audio.abandonAudioFocusRequest(focus);try{unregisterReceiver(noisy);}catch(Exception ignored){}current=null;super.onDestroy();}
 }

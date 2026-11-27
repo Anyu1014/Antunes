@@ -587,6 +587,24 @@ final class PlayerService: ObservableObject {
         }
     }
 
+    func removePlaylistEntry(_ entry: PlaybackQueuePlan.ListEntry) {
+        guard !entry.isCurrent else { return }
+        switch entry.id {
+        case .detachedCurrent:
+            return
+        case .inserted(let index):
+            guard playNextList.indices.contains(index), playNextList[index].id == entry.track.id else { return }
+            playNextList.remove(at: index)
+        case .queue(let index):
+            let active = activeQueue
+            guard active.indices.contains(index), active[index].id == entry.track.id,
+                  index != currentIndex || currentTrack?.id != entry.track.id else { return }
+            removeQueueRow(at: index, trackID: entry.track.id)
+            if index <= currentIndex { currentIndex -= 1 }
+        }
+        persistState()
+    }
+
     /// Queue rows carry their occurrence, so a repeated song selects the row
     /// the listener clicked rather than its first occurrence.
     func jumpToUpcoming(at index: Int, matching trackID: Int) {
