@@ -2426,60 +2426,16 @@ private struct MinimalTransportControls: View {
 struct NowPlayingScrubber: View {
     @EnvironmentObject private var player: PlayerService
     @EnvironmentObject private var settings: SettingsManager
-    @ObservedObject private var clock = PlayerService.shared.clock
 
-    @State private var isHovering = false
     @State private var isDragging = false
     @State private var dragProgress: Double = 0
 
-    private var fraction: Double {
-        guard player.duration > 0 else { return 0 }
-        let value = isDragging ? dragProgress : clock.progress
-        return min(max(value / player.duration, 0), 1)
-    }
-
     var body: some View {
         VStack(spacing: 5) {
-            GeometryReader { geo in
-                let width = geo.size.width
-                ZStack(alignment: .leading) {
-                    Capsule()
-                        .fill(.white.opacity(0.25))
-                        .frame(height: 4)
-                    Capsule()
-                        .fill(.white)
-                        .frame(width: max(4, width * fraction), height: 4)
-                    Circle()
-                        .fill(.white)
-                        .frame(width: thumbDiameter, height: thumbDiameter)
-                        .shadow(color: .black.opacity(0.3), radius: 2, y: 1)
-                        .offset(x: width * fraction - thumbDiameter / 2)
-                        .opacity(isHovering || isDragging ? 1 : 0)
-                }
-                .frame(maxHeight: .infinity)
-                .contentShape(Rectangle())
-                .gesture(
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { value in
-                            guard player.duration > 0 else { return }
-                            isDragging = true
-                            player.isScrubbing = true
-                            dragProgress = min(max(value.location.x / width, 0), 1) * player.duration
-                        }
-                        .onEnded { _ in
-                            player.seek(to: dragProgress)
-                            isDragging = false
-                            player.isScrubbing = false
-                        }
-                )
-            }
-            .frame(height: 14)
-            .onHover { hovering in
-                withAnimation(AppAnimation.quick) { isHovering = hovering }
-            }
+            NowPlayingSeekControl(isDragging: $isDragging, dragProgress: $dragProgress)
 
             HStack {
-                Text(Formatters.duration(isDragging ? dragProgress : clock.progress))
+                NowPlayingElapsedTime(isDragging: isDragging, dragProgress: dragProgress)
                 Spacer()
                 Text(Formatters.duration(player.duration))
             }
@@ -2533,9 +2489,73 @@ struct NowPlayingScrubber: View {
         .accessibilityLabel("音质")
         .accessibilityValue(currentQualityName)
     }
+}
+
+private struct NowPlayingSeekControl: View {
+    @EnvironmentObject private var player: PlayerService
+    @ObservedObject private var clock = PlayerService.shared.clock
+    @Binding var isDragging: Bool
+    @Binding var dragProgress: Double
+    @State private var isHovering = false
+
+    private var fraction: Double {
+        guard player.duration > 0 else { return 0 }
+        let value = isDragging ? dragProgress : clock.progress
+        return min(max(value / player.duration, 0), 1)
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            let width = geo.size.width
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(.white.opacity(0.25))
+                    .frame(height: 4)
+                Capsule()
+                    .fill(.white)
+                    .frame(width: max(4, width * fraction), height: 4)
+                Circle()
+                    .fill(.white)
+                    .frame(width: thumbDiameter, height: thumbDiameter)
+                    .shadow(color: .black.opacity(0.3), radius: 2, y: 1)
+                    .offset(x: width * fraction - thumbDiameter / 2)
+                    .opacity(isHovering || isDragging ? 1 : 0)
+            }
+            .frame(maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        guard player.duration > 0 else { return }
+                        isDragging = true
+                        player.isScrubbing = true
+                        dragProgress = min(max(value.location.x / width, 0), 1) * player.duration
+                    }
+                    .onEnded { _ in
+                        player.seek(to: dragProgress)
+                        isDragging = false
+                        player.isScrubbing = false
+                    }
+            )
+        }
+        .frame(height: 14)
+        .onHover { hovering in
+            withAnimation(AppAnimation.quick) { isHovering = hovering }
+        }
+    }
 
     private var thumbDiameter: CGFloat {
         isDragging ? 13 : (isHovering ? 11 : 9)
+    }
+}
+
+private struct NowPlayingElapsedTime: View {
+    @ObservedObject private var clock = PlayerService.shared.clock
+    let isDragging: Bool
+    let dragProgress: Double
+
+    var body: some View {
+        Text(Formatters.duration(isDragging ? dragProgress : clock.progress))
     }
 }
 

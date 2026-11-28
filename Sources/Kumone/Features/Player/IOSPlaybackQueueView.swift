@@ -5,15 +5,10 @@ struct IOSPlaybackQueueView: View {
     @EnvironmentObject private var player: PlayerService
     @EnvironmentObject private var toasts: ToastCenter
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        Group {
-            if #available(iOS 16.4, *) {
-                content.presentationBackground(.regularMaterial)
-            } else {
-                content.background(.regularMaterial)
-            }
-        }
+        content
         .presentationDetents([.fraction(0.78), .large])
         .presentationDragIndicator(.visible)
     }
@@ -46,7 +41,7 @@ struct IOSPlaybackQueueView: View {
 
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(spacing: 8) {
+                    LazyVStack(spacing: 12) {
                         PlaybackHandoffList()
                         ForEach(entries) { entry in
                             PlaybackQueueRow(entry: entry)
@@ -62,6 +57,23 @@ struct IOSPlaybackQueueView: View {
                     .padding(.horizontal, 12)
                 }
                 .scrollIndicators(.hidden)
+                .overlay(alignment: .bottomTrailing) {
+                    if let current = entries.first(where: \.isCurrent) {
+                        Button {
+                            withAnimation(reduceMotion ? nil : .easeInOut) {
+                                proxy.scrollTo(current.id, anchor: .center)
+                            }
+                        } label: {
+                            LocateGlyph(size: 20, color: Theme.accent)
+                                .frame(width: 38, height: 38)
+                                .background(.primary.opacity(0.06), in: Circle())
+                        }
+                        .buttonStyle(.pressable)
+                        .accessibilityLabel("定位当前歌曲")
+                        .padding(.trailing, 64)
+                        .padding(.bottom, 88)
+                    }
+                }
                 .onAppear {
                     guard let current = entries.first(where: \.isCurrent) else { return }
                     DispatchQueue.main.async {
@@ -90,6 +102,7 @@ struct IOSPlaybackQueueView: View {
 private struct PlaybackQueueRow: View {
     let entry: PlaybackQueuePlan.ListEntry
     private var track: Track { entry.track }
+    @ScaledMetric(relativeTo: .body) private var artworkSize: CGFloat = 44
 
     @EnvironmentObject private var player: PlayerService
     @Environment(\.dismiss) private var dismiss
@@ -102,16 +115,16 @@ private struct PlaybackQueueRow: View {
             } label: {
                 HStack(spacing: 10) {
                     CachedAsyncImage(url: track.album.picUrl?.resizedImageURL(96), animated: false)
-                        .frame(width: 36, height: 36)
+                        .frame(width: artworkSize, height: artworkSize)
                         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
 
                     VStack(alignment: .leading, spacing: 2) {
                         Text(track.name)
-                            .font(.subheadline.weight(.medium))
+                            .font(.body.weight(.medium))
                             .foregroundStyle(entry.isCurrent ? Theme.accent : .primary)
                             .lineLimit(1)
                         Text(track.artistNames)
-                            .font(.caption)
+                            .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }

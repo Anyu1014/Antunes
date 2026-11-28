@@ -6,7 +6,7 @@ android {
     namespace 'com.antunes.app'
     compileSdk 36
     buildFeatures { buildConfig true }
-    defaultConfig { applicationId 'com.antunes.app'; minSdk 29; targetSdk 36; versionCode 16; versionName '2.2' }
+    defaultConfig { applicationId 'com.antunes.app'; minSdk 29; targetSdk 36; versionCode 17; versionName '2.3' }
     signingConfigs { release { if (signingFile.exists()) { storeFile rootProject.file('.signing/release.jks'); storePassword signing['storePassword']; keyAlias signing['keyAlias']; keyPassword signing['keyPassword'] } } }
     buildTypes {
         // debug 用 release 证书签名：模拟器里那份是 release 签名的旧包，这样 adb install -r 可直接覆盖、不丢登录态

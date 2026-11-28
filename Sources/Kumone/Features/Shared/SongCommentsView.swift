@@ -47,7 +47,7 @@ struct SongCommentsView: View {
         #if os(macOS)
         .frame(minWidth: 420, idealWidth: 520, maxWidth: 760, minHeight: 420, idealHeight: 640, maxHeight: 960)
         #else
-        .presentationDetents([.medium, .large], selection: $detent)
+        .modifier(CommentsSheetInteraction(detent: $detent))
         .presentationDragIndicator(.visible)
         #endif
         // A sheet covers the window's own toast overlay (#182); errors from a
@@ -125,6 +125,22 @@ struct SongCommentsView: View {
         SongCommentsList(track: track, content: content)
     }
 }
+
+#if os(iOS)
+private struct CommentsSheetInteraction: ViewModifier {
+    @Binding var detent: PresentationDetent
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(iOS 16.4, *) {
+            content
+                .presentationDetents([.medium, .large], selection: $detent)
+                .presentationContentInteraction(.scrolls)
+        } else {
+            content.presentationDetents([.medium], selection: $detent)
+        }
+    }
+}
+#endif
 
 /// One song's comments with their loading, error and empty states: hot ones,
 /// then the latest a page at a time. Shared by the comments sheet and the

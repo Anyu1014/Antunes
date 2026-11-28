@@ -1147,6 +1147,11 @@ private struct PrivateConversationsResponse: Decodable {
     let msgs: [PrivateConversation]?
 }
 
+private struct PrivateUnreadConversationsResponse: Decodable {
+    let msgs: [PrivateConversation]?
+    let more: Bool?
+}
+
 private struct PrivateHistoryResponse: Decodable {
     let msgs: [PrivateMessage]?
 }
@@ -1168,6 +1173,24 @@ extension MusicAPI {
             ["offset": 0, "limit": 50, "total": true], requiringAuthentication: binding
         )
         return response.msgs ?? []
+    }
+
+    static func hasUnreadPrivateMessages(binding: String) async throws -> Bool {
+        var offset = 0
+        while true {
+            try Task.checkCancellation()
+            // shortcut: stop after 5,000 conversations; use a server unread total when available.
+            guard offset < 5_000 else { throw URLError(.cannotParseResponse) }
+            let response = try await eapi(
+                PrivateUnreadConversationsResponse.self,
+                "/msg/private/users",
+                ["offset": offset, "limit": 50, "total": true], requiringAuthentication: binding
+            )
+            let conversations = response.msgs ?? []
+            if conversations.contains(where: { ($0.newMsgCount ?? 0) > 0 }) { return true }
+            guard conversations.count == 50, response.more != false else { return false }
+            offset += conversations.count
+        }
     }
 
     static func privateHistory(userID: Int, before: Int64? = nil, binding: String) async throws -> [PrivateMessage] {

@@ -520,8 +520,33 @@ async function control(action,args={}){
 }
 let PlaybackLive=false,loginGeneration=0,sessionGeneration=0,playbackIntent=0;
 const accountOwner=()=>loggedIn?Number(account?.userId)||null:null;
+let hasUnreadMessages=false,unreadRequest=0;
+function setUnreadMessages(value){
+  hasUnreadMessages=!!value;
+  const entry=document.querySelector('#page .message-entry');
+  if(entry){entry.classList.toggle('has-unread',hasUnreadMessages);entry.setAttribute('aria-label',hasUnreadMessages?'私信，有未读消息':'私信');}
+}
+async function refreshUnreadMessages(){
+  const owner=accountOwner(),session=sessionGeneration,request=++unreadRequest;
+  if(!owner){setUnreadMessages(false);return;}
+  try{
+    let offset=0;
+    while(true){
+      // shortcut: stop after 5,000 conversations; use a server unread total when available.
+      if(offset>=5000)throw new Error('unread scan limit');
+      const result=await api('/msg/private/users',{offset,limit:50,total:true});
+      if(request!==unreadRequest||session!==sessionGeneration||owner!==accountOwner())return;
+      const conversations=Array.isArray(result.msgs)?result.msgs:[];
+      if(conversations.some(c=>Number(c?.newMsgCount)>0)){setUnreadMessages(true);return;}
+      if(conversations.length!==50||result.more===false){setUnreadMessages(false);return;}
+      offset+=conversations.length;
+    }
+  }catch{}
+}
+setInterval(()=>{if(!document.hidden)void refreshUnreadMessages();},30000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)void refreshUnreadMessages();});
 function resetAccountSession(signedIn){
-  sessionGeneration++;playbackIntent++;renderID++;
+  sessionGeneration++;playbackIntent++;renderID++;unreadRequest++;setUnreadMessages(false);
   loggedIn=signedIn;account=null;liked.clear();playlists=[];cache.clear();albumFavorites.clear();
 }
 async function play(items,index=0,intent=++playbackIntent,{fm=false}={}){
@@ -1272,7 +1297,8 @@ async function loadAccount(){
   const data=await api('/nuser/account/get');
   if(session!==sessionGeneration)return;
   account=data.profile;
-  if(!account){loggedIn=false;return;}
+  if(!account){loggedIn=false;setUnreadMessages(false);return;}
+  void refreshUnreadMessages();
   if(account.avatarUrl&&account.avatarUrl!==prefs.avatarUrl){prefs.avatarUrl=account.avatarUrl;savePrefs();}
   const results=await Promise.allSettled([api('/user/playlist',{uid:account.userId,limit:2000,offset:0,includeVideo:true}),api('/song/like/get',{uid:account.userId})]);
   if(session!==sessionGeneration)return;
@@ -1292,7 +1318,7 @@ async function libraryPage(){
   if(loggedIn&&!account)await loadAccount();
   const searchButton=prefs.librarySearch!==false?round('search',openSearchFromLibrary,'搜索音乐'):'';
   // 私信入口排在搜索左边，和 iOS 端顶栏两个按钮的顺序一致。
-  const messageButton=round('chat',()=>navigate({kind:'messages'}),'私信');
+  const messageButton=round('chat',()=>navigate({kind:'messages'}),hasUnreadMessages?'私信，有未读消息':'私信',`message-entry${hasUnreadMessages?' has-unread':''}`);
   let html=header('我的',messageButton+searchButton+round('gear',()=>openSettings(),'设置'));
   const profile=`<div class="group">${loggedIn&&account?`<div class="list-row profile-row">${account.avatarUrl?cover(account.avatarUrl,'avatar'):`<span class="avatar">${icon('user')}</span>`}<span class="list-label"><strong>${e(account.nickname)}</strong><small>${e(customProfileBio(accountOwner())||account.signature||'Antunes，随心而听')}</small></span></div>`:button(`<span class="avatar">${icon('user')}</span><span><strong>登录</strong><small>同步我喜欢的音乐、歌单与每日推荐</small></span>${icon('chevron','chevron')}`,()=>openLogin(),'list-row profile-row')}</div>`;
   if(!loggedIn)return html+profile;
@@ -1398,6 +1424,7 @@ const validChat=chat=>chat.kind==='chat'&&chat.session===sessionGeneration&&
 const sendingChat=new WeakSet();
 async function chatHistoryHTML(chat){
   const r=await api('/msg/private/history',{userId:chat.userId,limit:100,time:-1,total:true});
+  if(validChat(chat))void refreshUnreadMessages();
   const msgs=(r.msgs||[]).filter(Boolean).sort((a,b)=>Number(a.time||0)-Number(b.time||0));
   return msgs.map(m=>{
     const out=Number(m.fromUser?.userId||0)===chat.owner;
@@ -1842,11 +1869,11 @@ function settingsHTML(expanded=new Set()){
   html+=`<div class="group-label">玻璃</div><div class="group">${selectRow('玻璃样式','glassStyle',[['native','原生磨砂'],['frost','高透磨砂'],['clear','清透玻璃'],['off','关闭']],applyTheme)}</div>`;
   html+=`<div class="group-label">外观</div><div class="group">${collectionCoverSettingsRows()}${selectRow('主题','appearance',[['system','跟随系统'],['light','浅色'],['dark','深色']])}${toggleRow('底栏歌词','lyricBar',()=>{lyricsBar=prefs.lyricBar;if(!lyricsBar)tabsExpanded=false;renderChrome();})}${selectRow('歌词对齐','lyricAlignMode',[['left','居左'],['center','居中'],['right','居右']],()=>{chromeKey='';renderChrome();})}${toggleRow('底栏文字','tabLabels',applyTheme)}${toggleRow('我的页搜索按钮','librarySearch',()=>{if(route.kind==='library')render();})}${toggleRow('点击封面打开专辑','artworkLink')}${toggleRow('显示歌词翻译','translation')}${toggleRow('逐字歌词（卡拉OK）','karaoke',()=>{const t=player.queue[player.index];if(t)loadLyrics(t.id);})}${selectRow('日文歌词读音','annotation',[['none','无'],['romaji','罗马音']])}${toggleRow('主界面环境色','ambient',()=>{refreshSettings();refreshAmbient();})}${prefs.ambient?ambientIntensityRow():''}</div>`;
   html+=`<div class="group-label">存储</div><div class="group">${listRow('存储空间','download',openStorage)}${listRow('已下载','music',()=>{closeOverlay(true);navigate({kind:'downloads'});})}</div><div class="group-label">账号</div><div class="group">${loggedIn?`${listRow(account?.nickname||'已登录','user',()=>{})}${accountOwner()?listRow('自定义个人简介','user',openCustomProfileBio):''}${button('<span>退出登录</span>',()=>confirmAction('退出登录','将退出当前账号，本地下载与设置会保留。',async()=>{await native('logout');resetAccountSession(false);closeOverlay(true);render();}),'list-row danger')}`:listRow('登录','user',()=>openLogin())}</div>`;
-  html+=`<div class="group-label">关于</div><div class="group">${listRow('Antunes','music',openAbout,'<small>2.2</small>')}${listRow('开源许可','album',openLicenses)}</div>`;
+  html+=`<div class="group-label">关于</div><div class="group">${listRow('Antunes','music',openAbout,'<small>2.3</small>')}${listRow('开源许可','album',openLicenses)}</div>`;
   return html;
 }
 function openSettings(){showOverlay('settings',settingsHTML(),{title:'设置'});}
-function openAbout(){showOverlay('about',`<div class="about"><img src="icon.png" alt="Antunes 图标"><h2>Antunes</h2><p>随心而听的第三方网易云客户端</p><div class="group about-meta"><div class="list-row about-row"><span class="about-row-icon">${icon('user')}</span><strong>作者</strong><small>Anyu</small></div><div class="list-row about-row"><span class="about-row-icon">${icon('album')}</span><strong>当前版本</strong><small>2.2</small></div><div class="list-row about-row" role="button" tabindex="0" data-open-repo><span class="about-row-icon">${icon('link')}</span><strong>仓库</strong><small>Anyu1014/Antunes ›</small></div></div><p class="notice" style="margin-top:16px">许可证：LGPL-3.0-only</p></div>`,{title:'关于'});const repo=$('[data-open-repo]');if(repo)repo.onclick=()=>native('openUrl',{url:'https://github.com/Anyu1014/Antunes'}).catch(()=>{});}
+function openAbout(){showOverlay('about',`<div class="about"><img src="icon.png" alt="Antunes 图标"><h2>Antunes</h2><p>随心而听的第三方网易云客户端</p><div class="group about-meta"><div class="list-row about-row"><span class="about-row-icon">${icon('user')}</span><strong>作者</strong><small>Anyu</small></div><div class="list-row about-row"><span class="about-row-icon">${icon('album')}</span><strong>当前版本</strong><small>2.3</small></div><div class="list-row about-row" role="button" tabindex="0" data-open-repo><span class="about-row-icon">${icon('link')}</span><strong>仓库</strong><small>Anyu1014/Antunes ›</small></div></div><p class="notice" style="margin-top:16px">许可证：LGPL-3.0-only</p></div>`,{title:'关于'});const repo=$('[data-open-repo]');if(repo)repo.onclick=()=>native('openUrl',{url:'https://github.com/Anyu1014/Antunes'}).catch(()=>{});}
 function openLicenses(){showOverlay('licenses',`<div class="pad"><h3>Kumone</h3><p class="notice">Copyright © missuo / MOE AI LLC 与贡献者。源码与改动适用 LGPL-3.0-only；发行源码包含完整 LICENSE、COPYING。Anyu 磨砂样式由本机 Anyu 项目复用。</p><h3>QRCode</h3><p class="notice">node-qrcode · Copyright © 2012–2015 Ryan Day, 2015–2017 Soldair, 2016–2017 Enrico La Monica · MIT License。完整文本随应用 QRCODE-LICENSE.txt 附带。</p></div>`,{title:'开源许可'});}
 async function openStorage(){
   const items=await native('downloads');const stats=(await native('lyricStats'))||{count:0,bytes:0};
@@ -2190,10 +2217,17 @@ function openQualityMenu(){
   openPlayPanel('quality','音质',`<div class="quality-list">${body}</div>`);
 }
 
-function openQueue(){openPlayPanel('queue','播放队列',`<div class="detail-tools"><span>${player.queue.length} 首歌曲</span>${button({list:'列表循环',shuffle:'随机播放',single:'单曲循环'}[player.mode],cycleMode,'accent')}</div><div class="track-list">${player.queue.map((t,i)=>`<div class="track-row ${i===player.index?'current':''}">${button(`${cover(t.cover,'track-cover')}<span class="track-info"><strong>${e(t.name)}</strong><small>${e(t.artist)}</small></span>`,()=>{play(player.queue,i);closePlayPanel();},'track-main',`播放 ${t.name}`)}${i!==player.index?round('close',async()=>{await control('remove',{value:i});player.queue.splice(i,1);if(i<player.index)player.index--;openQueue();},'从队列移除'):icon('music')}</div>`).join('')}</div>`);requestAnimationFrame(()=>{const cur=document.querySelector('.track-row.current');const body=cur&&cur.closest('.pp-body');if(!cur||!body)return;
-  // 用视口矩形算，避免 offsetTop 基准（.track-list/表头）不一致带来的偏移。
-  const r=cur.getBoundingClientRect(), b=body.getBoundingClientRect();
-  body.scrollTop += (r.top+r.height/2)-(b.top+b.height/2);});}
+function openQueue(){const panel=openPlayPanel('queue','播放队列',`<div class="detail-tools"><span>${player.queue.length} 首歌曲</span>${button({list:'列表循环',shuffle:'随机播放',single:'单曲循环'}[player.mode],cycleMode,'accent')}</div><div class="track-list">${player.queue.map((t,i)=>`<div data-queue-index="${i}" class="track-row ${i===player.index?'current':''}">${button(`${cover(t.cover,'track-cover')}<span class="track-info"><strong>${e(t.name)}</strong><small>${e(t.artist)}</small></span>`,()=>{play(player.queue,i);closePlayPanel();},'track-main',`播放 ${t.name}`)}${i!==player.index?round('close',async()=>{await control('remove',{value:i});player.queue.splice(i,1);if(i<player.index)player.index--;openQueue();},'从队列移除'):icon('music')}</div>`).join('')}</div>`);
+  panel.querySelector('.queue-panel').insertAdjacentHTML('beforeend',round('locate',()=>locateQueueTrack(true),'定位当前歌曲','playlist-action accent queue-locate'));
+  requestAnimationFrame(()=>locateQueueTrack(false));
+}
+function locateQueueTrack(animate){
+  const body=document.querySelector('#np-float .queue-panel .pp-body');
+  const cur=body?.querySelector(`[data-queue-index="${player.index}"]`);
+  if(!cur)return;
+  const r=cur.getBoundingClientRect(),b=body.getBoundingClientRect();
+  body.scrollTo({top:body.scrollTop+(r.top+r.height/2)-(b.top+b.height/2),behavior:animate&&!matchMedia('(prefers-reduced-motion: reduce)').matches?'smooth':'instant'});
+}
 window.addEventListener('playback',({detail:s})=>{
   PlaybackLive=true;const previous=player.queue[player.index],wasPlaying=player.playing,wasFM=player.fm;player={...player,...s};lyricSync=Date.now();const t=player.queue[player.index];
   const trackChanged=t?.id!==previous?.id;const chromeChanged=trackChanged||wasPlaying!==player.playing;

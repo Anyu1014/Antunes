@@ -1236,6 +1236,8 @@ struct IOSLibraryView: View {
     @AppStorage("librarySearchButton") private var librarySearchButton = true
     @Binding var showLogin: Bool
     @EnvironmentObject private var account: AccountStore
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var hasUnreadMessages = false
     @AppStorage("libraryOrder") private var libraryOrder = "liked,daily,recents,collections,downloads,cloud"
     @AppStorage("libraryShowsLiked") private var libraryShowsLiked = true
     @AppStorage("libraryShowsDaily") private var libraryShowsDaily = true
@@ -1343,8 +1345,15 @@ struct IOSLibraryView: View {
                 HStack(spacing: 12) {
                     NavigationLink(value: Destination.messages) {
                         Image(systemName: "bubble.left.and.bubble.right")
+                            .overlay(alignment: .topTrailing) {
+                                if hasUnreadMessages {
+                                    Circle().fill(.red).frame(width: 8, height: 8)
+                                        .offset(x: 4, y: -3)
+                                        .accessibilityHidden(true)
+                                }
+                            }
                     }
-                    .accessibilityLabel("私信")
+                    .accessibilityLabel(hasUnreadMessages ? "私信，有未读消息" : "私信")
                     if librarySearchButton {
                         Button {
                             openSearch()
@@ -1361,6 +1370,23 @@ struct IOSLibraryView: View {
                     }
                     .accessibilityLabel("设置")
                 }
+            }
+        }
+        .task(id: scenePhase == .active ? account.authenticatedAccountID : nil) {
+            hasUnreadMessages = false
+            guard scenePhase == .active, let owner = account.authenticatedAccountID else { return }
+            while !Task.isCancelled {
+                if let binding = MusicClient.shared.authenticationFingerprint {
+                    do {
+                        let unread = try await MusicAPI.hasUnreadPrivateMessages(binding: binding)
+                        guard !Task.isCancelled, account.authenticatedAccountID == owner else { return }
+                        if MusicClient.shared.authenticationFingerprint == binding {
+                            hasUnreadMessages = unread
+                        }
+                    } catch { }
+                }
+                do { try await Task.sleep(nanoseconds: 30_000_000_000) }
+                catch { return }
             }
         }
         .alert("新建歌单", isPresented: $showNewPlaylist) {
